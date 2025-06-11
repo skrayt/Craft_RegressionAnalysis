@@ -1,0 +1,9 @@
+.venv/
+test.py
+test.sql
+Indicator
+pages/__pycache__
+components/__pycache__
+db/__pycache__
+db/regression_data.db
+database.db
