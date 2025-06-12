@@ -2,6 +2,9 @@ import flet as ft
 import pandas as pd
 from typing import Callable
 from db.database import sanitize_column_name, save_dataframe_to_sqlite_with_sanitization
+import os
+import numpy as np
+from sklearn.preprocessing import StandardScaler
 
 # グローバル変数
 checkbox_states = {}  # チェックボックスの状態を保持するグローバル辞書
@@ -17,24 +20,36 @@ def column_management_page(
         f"DEBUG: column_management_page - current_merged_dfカラム: {list(current_merged_df.columns)}"
     )
 
-    # original_dfが存在しない場合のエラーハンドリング
-    if not hasattr(page.app_data, "original_df") or page.app_data.original_df is None:  # type: ignore
-        print("DEBUG: original_dfが存在しないため、merged_dfから作成します。")
-        # original_dfが存在しない場合、merged_dfから作成
-        if "kijyunnengetu" in current_merged_df.columns:
-            original_columns = [
-                col for col in current_merged_df.columns if col != "kijyunnengetu"
-            ]
-            page.app_data.original_df = pd.DataFrame(current_merged_df[original_columns])  # type: ignore
-        else:
-            page.app_data.original_df = pd.DataFrame(current_merged_df)  # type: ignore
-        print(f"DEBUG: original_dfを作成しました。カラム: {list(page.app_data.original_df.columns)}")  # type: ignore
+    # CSVからデータを読み込む
+    IndicatorFolderPath = "Indicator"
+    EconomicIndicatorFile = "各種経済指標.csv"
+    EconomicIndicatorFilePath = os.path.join(IndicatorFolderPath, EconomicIndicatorFile)
+    pdFile = "v_pd.csv"
+    pdFilePath = os.path.join(IndicatorFolderPath, pdFile)
 
-    # オリジナルのデータフレームを使用
-    dialog_editing_df = pd.DataFrame(page.app_data.original_df.copy())  # type: ignore
-    print(
-        f"DEBUG: column_management_page - dialog_editing_dfカラム: {list(dialog_editing_df.columns)}"
-    )
+    try:
+        # 各種経済指標の読み込み
+        df1 = pd.read_csv(EconomicIndicatorFilePath)
+        df1_conveted = df1[df1["地域"] == "全国"]
+        df1_conveted["kijyunnengetu"] = pd.to_datetime(
+            df1["時点"], format="%Y年%m月"
+        ).dt.strftime("%Y%m")
+
+        # PDデータの読み込み
+        df2 = pd.read_csv(pdFilePath, dtype={"kijyunnengetu": str})
+
+        # 両方のデータフレームを単純に結合
+        dialog_editing_df = pd.merge(df1_conveted, df2, on="kijyunnengetu", how="outer")
+        print(f"DEBUG: dialog_editing_dfカラム: {list(dialog_editing_df.columns)}")
+    except Exception as e:
+        print(f"DEBUG: CSVからの読み込みに失敗しました: {e}")
+        snack = ft.SnackBar(content=ft.Text("データの読み込みに失敗しました。"))
+        page.add(snack)
+        snack.open = True
+        page.update()
+        page.go("/")
+        return
+
     column_controls_container = ft.Column()
 
     def set_unsaved_changes(e=None):
@@ -58,10 +73,11 @@ def column_management_page(
             # チェックボックスの初期状態を設定
             for col in dialog_editing_df.columns:
                 if col not in checkbox_states:
-                    # merged_dfに存在するカラムはTrue、それ以外はFalse
+                    # 現在のmerged_dfに存在するカラムはTrue、それ以外はFalse
                     checkbox_states[col] = col in current_merged_df.columns
 
             column_controls_list = []
+            # 元のCSVファイルのカラム順序を維持
             for col in dialog_editing_df.columns:
                 column_controls_list.append(
                     ft.Container(
@@ -84,14 +100,7 @@ def column_management_page(
                                 ft.TextField(
                                     key=f"rename_col_{col}",
                                     label="新しいカラム名",
-                                    # merged_dfで既にリネームされている場合はその名前を表示
-                                    value=(
-                                        current_merged_df.columns[
-                                            current_merged_df.columns.get_loc(col)
-                                        ]
-                                        if col in current_merged_df.columns
-                                        else col
-                                    ),
+                                    value=col,  # 元のカラム名をそのまま表示
                                     width=300,
                                     height=40,
                                     text_style=ft.TextStyle(size=14),
@@ -110,87 +119,125 @@ def column_management_page(
                 )
             column_controls_container.controls = column_controls_list
 
-    def save_data(e):
+    def save_data(e: ft.ControlEvent):
         global has_unsaved_changes, checkbox_states
         nonlocal dialog_editing_df
-        print("DEBUG: save_data called")
 
-        new_column_names: dict[str, str] = {}
-        for control in column_controls_container.controls:
-            if isinstance(control, ft.Container) and isinstance(
-                control.content, ft.Row
-            ):
-                for inner_control in control.content.controls:
-                    if isinstance(inner_control, ft.TextField):
-                        original_col = inner_control.key.replace("rename_col_", "")
-                        new_name = inner_control.value
-                        if new_name and new_name != original_col:
-                            new_column_names[str(original_col)] = sanitize_column_name(
-                                new_name
-                            )
+        print("DEBUG: save_data関数が呼び出されました。")
+        print(f"DEBUG: dialog_editing_dfカラム: {list(dialog_editing_df.columns)}")
+        print(f"DEBUG: checkbox_states: {checkbox_states}")
 
-        # チェックボックスの状態を元に、選択されたカラムをフィルタリング
-        columns_to_keep = [col for col, checked in checkbox_states.items() if checked]
-        print(f"DEBUG: Columns to keep: {columns_to_keep}")
+        # 選択されたカラムのみを抽出
+        selected_columns = [
+            col for col in dialog_editing_df.columns if checkbox_states.get(col, False)
+        ]
+        print(f"DEBUG: 選択されたカラム: {selected_columns}")
 
-        if not columns_to_keep:
+        if not selected_columns:
             snack = ft.SnackBar(
                 content=ft.Text("少なくとも1つのカラムを選択してください。")
             )
-            page.add(snack)
+            e.page.add(snack)
             snack.open = True
-            page.update()
-            print("DEBUG: No columns selected.")
+            e.page.update()
             return
 
-        # 選択されたカラムのみを保持
-        filtered_df = dialog_editing_df[columns_to_keep].copy()
+        # 新しいカラム名を取得
+        new_column_names = {}
+        for col in selected_columns:
+            # カラム管理画面のコンテナから直接TextFieldを探す
+            for control in column_controls_container.controls:
+                if isinstance(control.content, ft.Row):
+                    for row_control in control.content.controls:
+                        if (
+                            isinstance(row_control, ft.TextField)
+                            and row_control.key == f"rename_col_{col}"
+                        ):
+                            new_name = row_control.value
+                            if new_name and new_name != col:
+                                new_column_names[col] = new_name
+                            break
 
-        # カラム名の変更を適用
+        # 選択されたカラムのみを含む新しいデータフレームを作成
+        new_df = dialog_editing_df[selected_columns].copy()
+
+        # カラム名を変更
         if new_column_names:
-            print(f"DEBUG: Renaming columns: {new_column_names}")
-            filtered_df = filtered_df.rename(columns=new_column_names)
+            new_df = new_df.rename(columns=new_column_names)
 
-        # merged_dfを更新（kijyunnengetuで結合）
-        if "kijyunnengetu" in filtered_df.columns:
-            # 既存のmerged_dfからkijyunnengetu以外のカラムを取得
-            other_columns = [
-                col for col in current_merged_df.columns if col != "kijyunnengetu"
-            ]
-            # 新しいmerged_dfを作成
-            new_merged_df = pd.merge(
-                filtered_df,
-                current_merged_df[["kijyunnengetu"] + other_columns],
-                on="kijyunnengetu",
-                how="inner",
-            )
-            # page.app_dataを更新
-            page.app_data.merged_df = new_merged_df  # type: ignore
-            page.app_data.saved_df = new_merged_df.copy()  # type: ignore
-        else:
-            # kijyunnengetuがない場合は、filtered_dfをそのまま使用
-            page.app_data.merged_df = filtered_df  # type: ignore
-            page.app_data.saved_df = filtered_df.copy()  # type: ignore
-
-        print("DEBUG: Data saved to page.app_data.merged_df and saved_df.")
+        # PDデータのカラムにサフィックスを付ける
+        pd_columns = [
+            col
+            for col in new_df.columns
+            if col in df2.columns and col != "kijyunnengetu"
+        ]
+        if pd_columns:
+            new_df = new_df.rename(columns={col: f"{col}_pd" for col in pd_columns})
 
         try:
-            save_dataframe_to_sqlite_with_sanitization(page.app_data.saved_df)  # type: ignore
-            on_save_callback()
+            # カラム変更後のデータをmerged_dataテーブルに保存
+            try:
+                save_dataframe_to_sqlite_with_sanitization(
+                    new_df, table_name="merged_data"
+                )
+                print(
+                    "DEBUG: カラム変更後のデータをmerged_dataテーブルに保存しました。"
+                )
+                print(f"DEBUG: 保存したmerged_dataのカラム: {list(new_df.columns)}")
+                # page.app_dataのmerged_dfも更新
+                e.page.app_data.merged_df = new_df.copy()  # type: ignore
+
+                # 変換なしデータの標準化データを生成して保存
+                standardized_df = standardize_data(
+                    new_df.copy(), table_name_prefix="merged"
+                )
+                print(
+                    "DEBUG: 変換なしデータの標準化データをデータベースに保存しました。"
+                )
+            except Exception as e:
+                print(f"DEBUG: merged_dataテーブルへの保存に失敗しました: {e}")
+                raise e
+
+            # 変換データの生成と保存
+            transformations = ["対数変換", "差分化", "対数変換後に差分化"]
+            transformed_dfs = apply_transformations(new_df.copy(), transformations)
+
+            # 各変換データをデータベースに保存
+            for table_name, df in transformed_dfs.items():
+                try:
+                    # 変換データを保存
+                    save_dataframe_to_sqlite_with_sanitization(
+                        df, table_name=table_name
+                    )
+                    print(f"DEBUG: {table_name}をデータベースに保存しました。")
+
+                    # 標準化データを生成して保存
+                    standardized_df = standardize_data(df, table_name_prefix=table_name)
+                    print(
+                        f"DEBUG: {table_name}の標準化データをデータベースに保存しました。"
+                    )
+                except Exception as e:
+                    print(f"DEBUG: {table_name}の保存に失敗しました: {e}")
+
+            # 保存成功時の処理
             has_unsaved_changes = False
-            page.go("/")
-            snack = ft.SnackBar(content=ft.Text("データが保存されました。"))
-            page.add(snack)
+            snack = ft.SnackBar(content=ft.Text("データを保存しました。"))
+            e.page.add(snack)
             snack.open = True
-            page.update()
-            print("DEBUG: Data saved successfully to DB.")
+            e.page.update()
+
+            # コールバックを呼び出してデータテーブルを更新
+            if on_save_callback:
+                on_save_callback()
+
+            # 元のページに戻る
+            e.page.go("/")
         except Exception as e:
-            snack = ft.SnackBar(content=ft.Text(f"エラーが発生しました: {str(e)}"))
-            page.add(snack)
+            print(f"DEBUG: データの保存に失敗しました: {e}")
+            snack = ft.SnackBar(content=ft.Text("データの保存に失敗しました。"))
+            e.page.add(snack)
             snack.open = True
-            page.update()
-            print("エラー詳細:", str(e))
-            print("問題のカラム名:", list(filtered_df.columns))
+            e.page.update()
 
     def confirm_back(e):
         global has_unsaved_changes
@@ -262,3 +309,73 @@ def column_management_page(
         ),
         expand=True,  # Containerもexpandさせる
     )
+
+
+# 対数変換、差分化、対数変換後に差分化を適用する関数
+def apply_transformations(df, transformations):
+    # kijyunnengetuカラムを保持
+    kijyunnengetu_col = None
+    if "kijyunnengetu" in df.columns:
+        kijyunnengetu_col = df["kijyunnengetu"]
+        df = df.drop(columns=["kijyunnengetu"])
+
+    # 各変換を個別に適用し、それぞれのデータフレームを保存
+    transformed_dfs = {}
+
+    # 対数変換
+    if "対数変換" in transformations:
+        log_df = pd.DataFrame()
+        for col in df.columns:
+            log_df[f"{col}_log"] = np.log1p(df[col])
+        if kijyunnengetu_col is not None:
+            log_df["kijyunnengetu"] = kijyunnengetu_col
+        transformed_dfs["log_data"] = log_df
+
+    # 差分化
+    if "差分化" in transformations:
+        diff_df = pd.DataFrame()
+        for col in df.columns:
+            diff_df[f"{col}_diff"] = df[col].diff()
+        if kijyunnengetu_col is not None:
+            diff_df["kijyunnengetu"] = kijyunnengetu_col
+        transformed_dfs["diff_data"] = diff_df
+
+    # 対数変換後に差分化
+    if "対数変換後に差分化" in transformations:
+        log_diff_df = pd.DataFrame()
+        for col in df.columns:
+            log_diff_df[f"{col}_log_diff"] = np.log1p(df[col]).diff()
+        if kijyunnengetu_col is not None:
+            log_diff_df["kijyunnengetu"] = kijyunnengetu_col
+        transformed_dfs["log_diff_data"] = log_diff_df
+
+    return transformed_dfs
+
+
+# 標準化を適用する関数
+def standardize_data(df, table_name_prefix=""):
+    # kijyunnengetuカラムを保持
+    kijyunnengetu_col = None
+    if "kijyunnengetu" in df.columns:
+        kijyunnengetu_col = df["kijyunnengetu"]
+        df = df.drop(columns=["kijyunnengetu"])
+
+    # 標準化を適用
+    scaler = StandardScaler()
+    scaled_features = scaler.fit_transform(df)
+    scaled_df = pd.DataFrame(scaled_features, columns=df.columns)
+
+    # kijyunnengetuカラムを戻す
+    if kijyunnengetu_col is not None:
+        scaled_df["kijyunnengetu"] = kijyunnengetu_col
+
+    # データベースに保存
+    try:
+        save_dataframe_to_sqlite_with_sanitization(
+            scaled_df, table_name=f"{table_name_prefix}_standardized"
+        )
+        print(f"DEBUG: {table_name_prefix}の標準化データをデータベースに保存しました。")
+    except Exception as e:
+        print(f"DEBUG: {table_name_prefix}の標準化データの保存に失敗しました: {e}")
+
+    return scaled_df

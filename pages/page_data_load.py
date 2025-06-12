@@ -149,24 +149,41 @@ def apply_transformations(df, transformations):
         kijyunnengetu_col = df["kijyunnengetu"]
         result_df = result_df.drop(columns=["kijyunnengetu"])
 
-    # 変換を適用
-    for col in result_df.columns:
-        if "対数変換" in transformations:
-            result_df[f"{col}_log"] = np.log1p(result_df[col])
-        if "差分化" in transformations:
-            result_df[f"{col}_diff"] = result_df[col].diff()
-        if "対数変換後に差分化" in transformations:
-            result_df[f"{col}_log_diff"] = np.log1p(result_df[col]).diff()
+    # 各変換を個別に適用し、それぞれのデータフレームを保存
+    transformed_dfs = {}
 
-    # kijyunnengetuカラムを戻す
-    if kijyunnengetu_col is not None:
-        result_df["kijyunnengetu"] = kijyunnengetu_col
+    # 対数変換
+    if "対数変換" in transformations:
+        log_df = result_df.copy()
+        for col in log_df.columns:
+            log_df[f"{col}_log"] = np.log1p(log_df[col])
+        if kijyunnengetu_col is not None:
+            log_df["kijyunnengetu"] = kijyunnengetu_col
+        transformed_dfs["log_data"] = log_df
 
-    return result_df
+    # 差分化
+    if "差分化" in transformations:
+        diff_df = result_df.copy()
+        for col in diff_df.columns:
+            diff_df[f"{col}_diff"] = diff_df[col].diff()
+        if kijyunnengetu_col is not None:
+            diff_df["kijyunnengetu"] = kijyunnengetu_col
+        transformed_dfs["diff_data"] = diff_df
+
+    # 対数変換後に差分化
+    if "対数変換後に差分化" in transformations:
+        log_diff_df = result_df.copy()
+        for col in log_diff_df.columns:
+            log_diff_df[f"{col}_log_diff"] = np.log1p(log_diff_df[col]).diff()
+        if kijyunnengetu_col is not None:
+            log_diff_df["kijyunnengetu"] = kijyunnengetu_col
+        transformed_dfs["log_diff_data"] = log_diff_df
+
+    return transformed_dfs
 
 
 # 標準化を適用する関数
-def standardize_data(df):
+def standardize_data(df, table_name_prefix=""):
     # kijyunnengetuカラムを保持
     kijyunnengetu_col = None
     if "kijyunnengetu" in df.columns:
@@ -182,13 +199,21 @@ def standardize_data(df):
     if kijyunnengetu_col is not None:
         scaled_df["kijyunnengetu"] = kijyunnengetu_col
 
+    # データベースに保存
+    try:
+        save_dataframe_to_sqlite_with_sanitization(
+            scaled_df, table_name=f"{table_name_prefix}_standardized"
+        )
+        print(f"DEBUG: {table_name_prefix}の標準化データをデータベースに保存しました。")
+    except Exception as e:
+        print(f"DEBUG: {table_name_prefix}の標準化データの保存に失敗しました: {e}")
+
     return scaled_df
 
 
 # 標準化ボタンのクリックイベント
 def standardize_data_button_click(e: ft.ControlEvent):
     print(f"DEBUG: standardize_data_button_click関数が呼び出されました。")
-    print(f"DEBUG: standardize_data_button_click - Current app_data.merged_df (before check): {type(e.page.app_data.merged_df)}, empty: {e.page.app_data.merged_df.empty if isinstance(e.page.app_data.merged_df, pd.DataFrame) else 'N/A'}")  # type: ignore
     if e.page.app_data.merged_df is None or e.page.app_data.merged_df.empty:  # type: ignore
         snack = ft.SnackBar(content=ft.Text("データが読み込まれていません。"))
         e.page.add(snack)
@@ -198,35 +223,32 @@ def standardize_data_button_click(e: ft.ControlEvent):
         return
 
     transformations = ["対数変換", "差分化", "対数変換後に差分化"]
-    # merged_df のコピーに対して変換を適用
-    transformed_df = apply_transformations(
-        e.page.app_data.merged_df.copy(), transformations  # type: ignore
-    )
 
-    # 変換されたデータフレームに対して標準化を適用
-    standardized_df = standardize_data(transformed_df)
+    # 各変換を適用
+    transformed_dfs = apply_transformations(e.page.app_data.merged_df.copy(), transformations)  # type: ignore
 
-    # 標準化後のデータをAppDataに保存
-    e.page.app_data.standardized_df = standardized_df  # type: ignore
+    # 各変換データをデータベースに保存
+    for table_name, df in transformed_dfs.items():
+        try:
+            save_dataframe_to_sqlite_with_sanitization(df, table_name=table_name)
+            print(f"DEBUG: {table_name}をデータベースに保存しました。")
+        except Exception as e:
+            print(f"DEBUG: {table_name}の保存に失敗しました: {e}")
 
-    # 標準化後のデータをデータベースに保存
-    try:
-        save_dataframe_to_sqlite_with_sanitization(
-            standardized_df, table_name="standardized_data"
-        )
-        print("DEBUG: 標準化後のデータをデータベースに保存しました。")
-    except Exception as e:
-        print(f"DEBUG: 標準化後のデータの保存に失敗しました: {e}")
-        snack = ft.SnackBar(content=ft.Text("標準化後のデータの保存に失敗しました。"))
-        e.page.add(snack)
-        snack.open = True
-        e.page.update()
-        return
+    # 各変換データを標準化
+    standardized_dfs = {}
+    for table_name, df in transformed_dfs.items():
+        standardized_df = standardize_data(df, table_name_prefix=table_name)
+        standardized_dfs[table_name] = standardized_df
+
+    # 最後に適用した変換のデータを表示用に設定
+    last_transformation = list(transformed_dfs.keys())[-1]
+    e.page.app_data.standardized_df = standardized_dfs[last_transformation]  # type: ignore
 
     # 標準化後のデータテーブルを更新
-    update_standardized_data_table(e.page, standardized_df)
+    update_standardized_data_table(e.page, e.page.app_data.standardized_df)  # type: ignore
     e.page.update()
-    print("DEBUG: 標準化が完了しました。")
+    print("DEBUG: すべての変換と標準化が完了しました。")
 
 
 # カラム管理ページに遷移する関数 (グローバル関数として移動)
@@ -288,16 +310,32 @@ def load_initial_csv_data(page: ft.Page):  # pageを引数として受け取る
         # 両方のデータフレームを結合してoriginal_dfを作成
         merged_original = pd.merge(df1_conveted, df2, on="kijyunnengetu", how="outer")
 
-        # kijyunnengetuを除くカラムをoriginal_dfとして設定
-        original_columns = [
-            col for col in merged_original.columns if col != "kijyunnengetu"
-        ]
-        page.app_data.original_df = merged_original[original_columns].copy()  # type: ignore
+        # original_dfとして設定（kijyunnengetuを含める）
+        page.app_data.original_df = merged_original.copy()  # type: ignore
+
+        # データベースに保存
+        try:
+            save_dataframe_to_sqlite_with_sanitization(
+                page.app_data.original_df, table_name="original_data"  # type: ignore
+            )
+            print("DEBUG: original_dfをデータベースに保存しました。")
+        except Exception as e:
+            print(f"DEBUG: original_dfの保存に失敗しました: {e}")
 
         print(f"original_df設定完了。シェイプ: {page.app_data.original_df.shape}, カラム: {list(page.app_data.original_df.columns)}")  # type: ignore
 
         # merged_dfの作成（inner結合）
         page.app_data.merged_df = pd.DataFrame(pd.merge(df1_conveted, df2, on="kijyunnengetu", how="inner"))  # type: ignore
+
+        # merged_dfをデータベースに保存
+        try:
+            save_dataframe_to_sqlite_with_sanitization(
+                page.app_data.merged_df, table_name="merged_data"  # type: ignore
+            )
+            print("DEBUG: merged_dfをデータベースに保存しました。")
+        except Exception as e:
+            print(f"DEBUG: merged_dfの保存に失敗しました: {e}")
+
         print(f"merged_df (結合後)。シェイプ: {page.app_data.merged_df.shape}, カラム: {list(page.app_data.merged_df.columns)}")  # type: ignore
 
         print("初期CSVロード完了。")
@@ -313,87 +351,180 @@ def load_initial_csv_data(page: ft.Page):  # pageを引数として受け取る
 
 # データベースからの初期読み込み (グローバル関数として移動)
 def initialize_data_from_db_or_csv(page: ft.Page):
-    # merged_dfはpage.app_data経由でアクセス
-    db_data = read_dataframe_from_sqlite("data")  # db.databaseから読み込む
-    if db_data is not None and not db_data.empty:
-        page.app_data.merged_df = pd.DataFrame(db_data)  # type: ignore
+    """データベースまたはCSVからデータを初期化する"""
+    try:
+        # まずmerged_dataテーブルを確認
+        merged_data = read_dataframe_from_sqlite("merged_data")
 
-        # 標準化後のデータも読み込む
-        try:
-            standardized_data = read_dataframe_from_sqlite("standardized_data")  # type: ignore
-            if standardized_data is not None and not standardized_data.empty:
-                page.app_data.standardized_df = pd.DataFrame(standardized_data)  # type: ignore
-                # 標準化後のデータテーブルを更新
-                update_standardized_data_table(page, page.app_data.standardized_df)  # type: ignore
-        except Exception as e:
-            print(f"DEBUG: standardized_dataテーブルの読み込みに失敗しました: {e}")
-            # standardized_dataテーブルが存在しない場合は、standardized_dfをNoneに設定
-            page.app_data.standardized_df = None  # type: ignore
-            # 標準化後のデータテーブルをクリア
-            update_standardized_data_table(page, pd.DataFrame())
+        if merged_data is not None and not merged_data.empty:
+            # merged_dataが存在する場合はそれを使用
+            page.app_data.merged_df = pd.DataFrame(merged_data)  # type: ignore
+            print("DEBUG: merged_dataテーブルからデータを読み込みました。")
+            print(f"DEBUG: merged_dataのカラム: {list(merged_data.columns)}")
+        else:
+            # merged_dataが存在しない場合はCSVから読み込み
+            print("DEBUG: merged_dataテーブルが存在しないため、CSVから読み込みます。")
+            load_initial_csv_data(page)
 
-        # データベースから読み込んだ場合、original_dfは初期CSVから作成
-        IndicatorFolderPath = "Indicator"
-        EconomicIndicatorFile = "各種経済指標.csv"
-        EconomicIndicatorFilePath = os.path.join(
-            IndicatorFolderPath, EconomicIndicatorFile
-        )
-        pdFile = "v_pd.csv"
-        pdFilePath = os.path.join(IndicatorFolderPath, pdFile)
+            # 読み込んだデータをmerged_dataとして保存
+            if page.app_data.merged_df is not None and not page.app_data.merged_df.empty:  # type: ignore
+                try:
+                    save_dataframe_to_sqlite_with_sanitization(
+                        page.app_data.merged_df, table_name="merged_data"  # type: ignore
+                    )
+                    print("DEBUG: merged_dfをデータベースに保存しました。")
+                    print(f"DEBUG: 保存したmerged_dfのカラム: {list(page.app_data.merged_df.columns)}")  # type: ignore
+                except Exception as e:
+                    print(f"DEBUG: merged_dfの保存に失敗しました: {e}")
 
-        try:
-            # 各種経済指標の読み込み
-            df1 = pd.read_csv(EconomicIndicatorFilePath)
-            df1_conveted = df1[df1["地域"] == "全国"]
-            df1_conveted["kijyunnengetu"] = pd.to_datetime(
-                df1["時点"], format="%Y年%m月"
-            ).dt.strftime("%Y%m")
-
-            # PDデータの読み込み
-            df2 = pd.read_csv(pdFilePath, dtype={"kijyunnengetu": str})
-
-            # 両方のデータフレームを結合してoriginal_dfを作成
-            merged_original = pd.merge(
-                df1_conveted, df2, on="kijyunnengetu", how="outer"
-            )
-
-            # kijyunnengetuを除くカラムをoriginal_dfとして設定
-            original_columns = [
-                col for col in merged_original.columns if col != "kijyunnengetu"
-            ]
-            page.app_data.original_df = merged_original[original_columns].copy()  # type: ignore
-
-            print(f"データベースからデータロード完了。")
-            print(f"merged_dfシェイプ: {page.app_data.merged_df.shape}, カラム: {list(page.app_data.merged_df.columns)}")  # type: ignore
-            print(f"original_dfシェイプ: {page.app_data.original_df.shape}, カラム: {list(page.app_data.original_df.columns)}")  # type: ignore
-        except Exception as e:
-            print(f"初期CSVの読み込みに失敗しました: {e}")
-            # CSVの読み込みに失敗した場合、merged_dfからoriginal_dfを作成
-            if "kijyunnengetu" in db_data.columns:
-                original_columns = [
-                    col for col in db_data.columns if col != "kijyunnengetu"
-                ]
-                page.app_data.original_df = pd.DataFrame(db_data[original_columns])  # type: ignore
-            else:
-                page.app_data.original_df = pd.DataFrame(db_data)  # type: ignore
-            print(f"merged_dfからoriginal_dfを作成しました。")
-            print(f"merged_dfシェイプ: {page.app_data.merged_df.shape}, カラム: {list(page.app_data.merged_df.columns)}")  # type: ignore
-            print(f"original_dfシェイプ: {page.app_data.original_df.shape}, カラム: {list(page.app_data.original_df.columns)}")  # type: ignore
-    else:
-        print("データベースにデータがないため、初期CSVをロードします。")
-        load_initial_csv_data(page)  # pageを渡す
+    except Exception as e:
+        print(f"DEBUG: データの初期化中にエラーが発生しました: {e}")
+        print("データベースの初期化に失敗したため、CSVから読み込みます。")
+        load_initial_csv_data(page)
 
 
-# FletアプリケーションのUIを構築する関数
 def data_load_page(page: ft.Page):
     page.title = "データベース整備ツール"
 
     global checkbox_states, data_table, standardized_data_table
 
     print(f"DEBUG: data_load_page関数が呼び出されました。")
-    print(
-        f"DEBUG: data_load_page - page.app_data.merged_df type: {type(page.app_data.merged_df)}, is None: {page.app_data.merged_df is None}, is_empty: {page.app_data.merged_df.empty if isinstance(page.app_data.merged_df, pd.DataFrame) else 'N/A'}"
+
+    # 変換タイプの選択肢
+    transformation_types = {
+        "none": "変換なし",
+        "log": "対数変換",
+        "diff": "差分化",
+        "log_diff": "対数変換後に差分化",
+    }
+
+    # データ表示用のコンテナ
+    content_container = ft.Container(
+        content=data_table,
+        width=1200,
+        height=300,
+        bgcolor=ft.Colors.WHITE,
+        border=ft.border.all(1, ft.Colors.GREY_300),
+        alignment=ft.alignment.top_left,
+        expand=False,
     )
+
+    # 変換タイプ選択用ドロップダウン
+    transformation_dropdown = ft.Dropdown(
+        label="変換タイプ",
+        options=[
+            ft.dropdown.Option(key, value)
+            for key, value in transformation_types.items()
+        ],
+        value="none",
+        width=200,
+        on_change=lambda e: update_displayed_data(e.page),
+    )
+
+    # 標準化スイッチ
+    standardization_switch = ft.Switch(
+        label="標準化",
+        value=False,
+        on_change=lambda e: update_displayed_data(e.page),
+    )
+
+    def get_selected_dataframe():
+        """選択された設定に基づいて表示するデータフレームを取得"""
+        transformation = transformation_dropdown.value
+        is_standardized = standardization_switch.value
+
+        # データベースからデータを読み込む
+        try:
+            if transformation == "none":
+                # 変換なしの場合
+                if is_standardized:
+                    # 標準化データを表示
+                    df = read_dataframe_from_sqlite("merged_standardized")
+                    if df is not None and not df.empty:
+                        print(
+                            f"DEBUG: merged_standardizedを表示します。カラム: {list(df.columns)}"
+                        )
+                        return pd.DataFrame(df)
+
+                # 標準化なしのデータを表示
+                df = read_dataframe_from_sqlite("merged_data")
+                if df is not None and not df.empty:
+                    print(f"DEBUG: merged_dataを表示します。カラム: {list(df.columns)}")
+                    return pd.DataFrame(df)
+
+                # merged_dataが存在しない場合はoriginal_dataを表示
+                df = read_dataframe_from_sqlite("original_data")
+                if df is not None and not df.empty:
+                    print(
+                        f"DEBUG: original_dataを表示します。カラム: {list(df.columns)}"
+                    )
+                    return pd.DataFrame(df)
+                print("DEBUG: 表示するデータが存在しません。")
+                return None
+
+            # 変換データの属性名を構築
+            table_name = f"{transformation}_data"
+            if is_standardized:
+                table_name += "_standardized"
+
+            # データベースからデータを読み込む
+            df = read_dataframe_from_sqlite(table_name)
+            if df is not None and not df.empty:
+                print(f"DEBUG: {table_name}を表示します。カラム: {list(df.columns)}")
+                return pd.DataFrame(df)
+            print(f"DEBUG: {table_name}が存在しません。")
+            return None
+
+        except Exception as e:
+            print(f"DEBUG: データの読み込みに失敗しました: {e}")
+            return None
+
+    def update_displayed_data(page: ft.Page):
+        """選択された設定に基づいて表示データを更新"""
+        # 標準化スイッチの制御を先に行う
+        if transformation_dropdown.value == "none":
+            # 変換なしの場合、merged_standardizedテーブルの存在を確認
+            standardized_df = read_dataframe_from_sqlite("merged_standardized")
+            standardization_switch.disabled = (
+                standardized_df is None or standardized_df.empty
+            )
+            print(
+                f"DEBUG: 標準化スイッチの状態 - disabled: {standardization_switch.disabled}, 変換タイプ: {transformation_dropdown.value}, 標準化データ存在: {standardized_df is not None and not standardized_df.empty}"
+            )
+        else:
+            # 変換ありの場合、対応する標準化データテーブルの存在を確認
+            table_name = f"{transformation_dropdown.value}_data_standardized"
+            standardized_df = read_dataframe_from_sqlite(table_name)
+            standardization_switch.disabled = (
+                standardized_df is None or standardized_df.empty
+            )
+            print(
+                f"DEBUG: 標準化スイッチの状態 - disabled: {standardization_switch.disabled}, 変換タイプ: {transformation_dropdown.value}, 標準化データ存在: {standardized_df is not None and not standardized_df.empty}"
+            )
+
+        # データの表示を更新
+        df = get_selected_dataframe()
+
+        if df is not None and not df.empty:
+            # データテーブルの更新
+            data_table.columns = [ft.DataColumn(ft.Text(col)) for col in df.columns]
+            data_table.rows = [
+                ft.DataRow(cells=[ft.DataCell(ft.Text(str(value))) for value in row])
+                for row in df.itertuples(index=False)
+            ]
+            content_container.content = data_table
+            print(f"DEBUG: データテーブルを更新しました。カラム: {list(df.columns)}")
+        else:
+            # データが存在しない場合
+            data_table.columns = [ft.DataColumn(ft.Text("No Data"))]
+            data_table.rows = []
+            content_container.content = data_table
+            print("DEBUG: データが存在しないため、テーブルをクリアしました。")
+
+        page.update()
+
+    # 初期表示の更新
+    update_displayed_data(page)
 
     # Initialize buttons locally within the data_load_page function
     column_management_button_local = ft.ElevatedButton(
@@ -401,22 +532,13 @@ def data_load_page(page: ft.Page):
         disabled=True,  # 初期状態は無効
         on_click=go_to_column_management,
     )
-    standardize_button_local = ft.ElevatedButton(
-        "標準化を適用",
-        disabled=True,  # 初期状態は無効
-        on_click=standardize_data_button_click,
-    )
 
     # ボタンの有効/無効状態を更新
     is_data_loaded = page.app_data.merged_df is not None and not page.app_data.merged_df.empty  # type: ignore
     column_management_button_local.disabled = not is_data_loaded
-    standardize_button_local.disabled = not is_data_loaded
     print(f"DEBUG: data_load_page - is_data_loaded: {is_data_loaded}")
     print(
         f"DEBUG: data_load_page - column_management_button_local.disabled: {column_management_button_local.disabled}"
-    )
-    print(
-        f"DEBUG: data_load_page - standardize_button_local.disabled: {standardize_button_local.disabled}"
     )
 
     # 初期化処理
@@ -441,51 +563,27 @@ def data_load_page(page: ft.Page):
         standardized_data_table.columns = [ft.DataColumn(ft.Text("No Data"))]
         standardized_data_table.rows = []
 
-    # タブ切り替え用の関数
-    def change_tab(e):
-        tabs.selected_index = e.control.selected_index
-        # タブ切り替え時にコンテンツを更新
-        if tabs.selected_index == 0:
-            content_container.content = data_table
-        else:
-            content_container.content = standardized_data_table
-        page.update()
-
-    # コンテンツ表示用のコンテナ
-    content_container = ft.Container(
-        content=data_table,  # 初期表示は元データ
-        width=1200,
-        height=300,
-        bgcolor=ft.Colors.WHITE,
-        border=ft.border.all(1, ft.Colors.GREY_300),
-        alignment=ft.alignment.top_left,
-        expand=False,
-    )
-
-    # タブの作成
-    tabs = ft.Tabs(
-        selected_index=0,
-        on_change=change_tab,
-        tabs=[
-            ft.Tab(text="元データ"),
-            ft.Tab(text="標準化後のデータ"),
-        ],
-    )
-
     return ft.Container(
         content=ft.Column(
             [
                 ft.Row(
                     [
                         column_management_button_local,
-                        standardize_button_local,
                     ],
                     alignment=ft.MainAxisAlignment.START,
                     spacing=20,
                 ),
                 ft.Divider(),
-                tabs,
-                content_container,  # タブの下にコンテンツを表示
+                ft.Row(
+                    [
+                        transformation_dropdown,
+                        standardization_switch,
+                    ],
+                    alignment=ft.MainAxisAlignment.START,
+                    spacing=20,
+                ),
+                ft.Divider(),
+                content_container,
             ],
             scroll=ft.ScrollMode.AUTO,
             expand=True,
