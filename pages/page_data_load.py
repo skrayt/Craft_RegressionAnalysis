@@ -308,7 +308,7 @@ def load_initial_csv_data(page: ft.Page):  # pageを引数として受け取る
         print(f"df2読み込み完了。シェイプ: {df2.shape}, カラム: {list(df2.columns)}")
 
         # 両方のデータフレームを結合してoriginal_dfを作成
-        merged_original = pd.merge(df1_conveted, df2, on="kijyunnengetu", how="outer")
+        merged_original = pd.merge(df1_conveted, df2, on="kijyunnengetu", how="inner")
 
         # original_dfとして設定（kijyunnengetuを含める）
         page.app_data.original_df = merged_original.copy()  # type: ignore

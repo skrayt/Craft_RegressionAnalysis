@@ -39,7 +39,7 @@ def column_management_page(
         df2 = pd.read_csv(pdFilePath, dtype={"kijyunnengetu": str})
 
         # 両方のデータフレームを単純に結合
-        dialog_editing_df = pd.merge(df1_conveted, df2, on="kijyunnengetu", how="outer")
+        dialog_editing_df = pd.merge(df1_conveted, df2, on="kijyunnengetu", how="inner")
         print(f"DEBUG: dialog_editing_dfカラム: {list(dialog_editing_df.columns)}")
     except Exception as e:
         print(f"DEBUG: CSVからの読み込みに失敗しました: {e}")
