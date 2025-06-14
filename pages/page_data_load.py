@@ -323,21 +323,124 @@ def data_load_page(page: ft.Page):
         "log_diff": "対数変換後に差分化",
     }
 
-    # データ表示用のコンテナ
-    # コンテンツ表示用のコンテナ
-    lv = ft.ListView(
-        controls=[data_table],  # 初期表示は元データ
-        horizontal=True,
+    # ヘッダーとデータ行の表示用コンポーネント
+    header_row = ft.Row(
+        controls=[],
+        alignment=ft.MainAxisAlignment.START,
     )
+    data_listview = ft.ListView(
+        expand=True,
+        spacing=0,
+        padding=0,
+    )
+
+    # テーブル全体を包むスクロール可能なコンテナ
+    scrollable_container = ft.Container(
+        content=ft.Column(
+            [
+                # ヘッダー行（固定）
+                ft.Container(
+                    content=header_row,
+                    border=ft.border.only(
+                        left=ft.border.BorderSide(1, ft.Colors.GREY_300),
+                        right=ft.border.BorderSide(1, ft.Colors.GREY_300),
+                        top=ft.border.BorderSide(1, ft.Colors.GREY_300),
+                    ),
+                    bgcolor=ft.Colors.GREY_100,  # ヘッダーの背景色
+                ),
+                # データ行（スクロール可能）
+                ft.Container(
+                    content=data_listview,
+                    border=ft.border.only(
+                        left=ft.border.BorderSide(1, ft.Colors.GREY_300),
+                        right=ft.border.BorderSide(1, ft.Colors.GREY_300),
+                        bottom=ft.border.BorderSide(1, ft.Colors.GREY_300),
+                    ),
+                    expand=True,
+                ),
+            ],
+            spacing=0,
+            expand=True,
+        ),
+        expand=True,
+    )
+
+    # データ表示用のコンテナ構造を更新
+    table_container = ft.Container(
+        content=ft.Row(
+            [scrollable_container],
+            scroll=ft.ScrollMode.AUTO,  # 横スクロールを有効化
+        ),
+        expand=True,
+    )
+
+    # コンテンツ表示用のコンテナ（先に定義）
     content_container = ft.Container(
-        content=lv,
-        # width=1500,
-        # height=1000,
+        content=table_container,
         bgcolor=ft.Colors.WHITE,
-        border=ft.border.all(1, ft.Colors.GREY_300),
-        alignment=ft.alignment.top_left,
-        expand=False,
+        expand=True,
     )
+
+    # データテーブルを更新する関数
+    def update_data_table_content(df: pd.DataFrame):
+        # カラム幅の設定（固定幅）
+        column_width = 200  # カラム幅を200pxに増加
+
+        # テーブルの全体幅を計算（余裕を持たせる）
+        total_width = max(column_width * len(df.columns) + 50, 800)  # 最小幅800pxを確保
+
+        # スクロール可能なコンテナの幅を設定
+        scrollable_container.width = total_width
+
+        # ヘッダー行の更新
+        header_controls = []
+        for col in df.columns:
+            header_controls.append(
+                ft.Container(
+                    content=ft.Text(
+                        col,
+                        weight=ft.FontWeight.BOLD,
+                        size=14,  # フォントサイズを調整
+                    ),
+                    width=column_width,
+                    padding=ft.padding.only(
+                        left=15, right=15, top=8, bottom=8
+                    ),  # パディングを増加
+                    border=ft.border.only(
+                        right=ft.border.BorderSide(1, ft.Colors.GREY_300)
+                    ),
+                )
+            )
+        header_row.controls = header_controls
+
+        # データ行の更新
+        data_listview.controls.clear()
+        for row in df.itertuples(index=False):
+            data_row = ft.Row(
+                controls=[
+                    ft.Container(
+                        content=ft.Text(
+                            str(value),
+                            size=14,  # フォントサイズを調整
+                        ),
+                        width=column_width,
+                        padding=ft.padding.only(
+                            left=15, right=15, top=8, bottom=8
+                        ),  # パディングを増加
+                        border=ft.border.only(
+                            right=ft.border.BorderSide(1, ft.Colors.GREY_300)
+                        ),
+                    )
+                    for value in row
+                ],
+                alignment=ft.MainAxisAlignment.START,
+            )
+            # 交互の行の背景色を設定
+            if len(data_listview.controls) % 2 == 1:
+                data_row.bgcolor = ft.Colors.GREY_50
+            data_listview.controls.append(data_row)
+
+        page.update()
 
     # 変換タイプ選択用ドロップダウン
     transformation_dropdown = ft.Dropdown(
@@ -413,23 +516,15 @@ def data_load_page(page: ft.Page):
         """選択された設定に基づいて表示データを更新"""
         # 標準化スイッチの制御を先に行う
         if transformation_dropdown.value == "none":
-            # 変換なしの場合、merged_standardizedテーブルの存在を確認
             standardized_df = read_dataframe_from_sqlite("merged_standardized")
             standardization_switch.disabled = (
                 standardized_df is None or standardized_df.empty
             )
-            print(
-                f"DEBUG: 標準化スイッチの状態 - disabled: {standardization_switch.disabled}, 変換タイプ: {transformation_dropdown.value}, 標準化データ存在: {standardized_df is not None and not standardized_df.empty}"
-            )
         else:
-            # 変換ありの場合、対応する標準化データテーブルの存在を確認
             table_name = f"{transformation_dropdown.value}_data_standardized"
             standardized_df = read_dataframe_from_sqlite(table_name)
             standardization_switch.disabled = (
                 standardized_df is None or standardized_df.empty
-            )
-            print(
-                f"DEBUG: 標準化スイッチの状態 - disabled: {standardization_switch.disabled}, 変換タイプ: {transformation_dropdown.value}, 標準化データ存在: {standardized_df is not None and not standardized_df.empty}"
             )
 
         # データの表示を更新
@@ -437,18 +532,19 @@ def data_load_page(page: ft.Page):
 
         if df is not None and not df.empty:
             # データテーブルの更新
-            data_table.columns = [ft.DataColumn(ft.Text(col)) for col in df.columns]
-            data_table.rows = [
-                ft.DataRow(cells=[ft.DataCell(ft.Text(str(value))) for value in row])
-                for row in df.itertuples(index=False)
-            ]
-            content_container.content = data_table
+            update_data_table_content(df)
+            content_container.content = table_container
             print(f"DEBUG: データテーブルを更新しました。カラム: {list(df.columns)}")
         else:
             # データが存在しない場合
-            data_table.columns = [ft.DataColumn(ft.Text("No Data"))]
-            data_table.rows = []
-            content_container.content = data_table
+            header_row.controls = [
+                ft.Container(
+                    content=ft.Text("No Data", weight=ft.FontWeight.BOLD),
+                    padding=ft.padding.only(left=10, right=10, top=5, bottom=5),
+                )
+            ]
+            data_listview.controls.clear()
+            content_container.content = table_container
             print("DEBUG: データが存在しないため、テーブルをクリアしました。")
 
         page.update()
@@ -486,9 +582,13 @@ def data_load_page(page: ft.Page):
         page.update()
 
     # DataTableのカラムが空の場合はダミーカラムをセット
-    if not data_table.columns:
-        data_table.columns = [ft.DataColumn(ft.Text("No Data"))]
-        data_table.rows = []
+    if not data_listview.controls:
+        data_listview.controls = [
+            ft.Container(
+                content=ft.Text("No Data"),
+                padding=ft.padding.only(left=10, right=10, top=5, bottom=5),
+            )
+        ]
     if not standardized_data_table.columns:
         standardized_data_table.columns = [ft.DataColumn(ft.Text("No Data"))]
         standardized_data_table.rows = []
@@ -515,13 +615,9 @@ def data_load_page(page: ft.Page):
                     expand=0.5,
                 ),
                 ft.Divider(),
-                ft.Row(
-                    controls=[content_container],
-                    expand=9,
-                ),
+                content_container,  # シンプルにcontent_containerを使用
             ],
-            scroll=ft.ScrollMode.AUTO,
-            expand=False,
+            expand=True,
         ),
         expand=True,
     )
