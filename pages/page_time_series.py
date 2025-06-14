@@ -35,8 +35,10 @@ TRANSFORMATION_TYPES = {
     "log_diff": "対数変換後に差分化",
 }
 
-# チェックボックスの状態を保持するグローバル辞書
-checkbox_states = {}
+# グローバル変数
+checkbox_states = {}  # チェックボックスの状態を保持するグローバル辞書
+transformation_states = {}  # 各変数の変換タイプを保持するグローバル辞書
+standardization_states = {}  # 各変数の標準化状態を保持するグローバル辞書
 
 
 def get_dataframe_for_pattern(
@@ -196,273 +198,286 @@ def plot_single_time_series(
 
 
 def time_series_page(page: ft.Page):
-    """時系列データ分析ページを構築"""
-    # 初期データの読み込み
-    initial_df = read_dataframe_from_sqlite("merged_data")
-    if initial_df is not None and not initial_df.empty:
-        all_columns = [col for col in initial_df.columns if col != "kijyunnengetu"]
-    else:
-        all_columns = []
+    """時系列データの表示と分析を行うページ"""
+    global checkbox_states, transformation_states, standardization_states
 
-    # 変換タイプ選択用ドロップダウン
-    transformation_dropdown = ft.Dropdown(
-        label="変換タイプ",
-        options=[
-            ft.dropdown.Option(key, value)
-            for key, value in TRANSFORMATION_TYPES.items()
-        ],
-        value="none",
-        width=200,
-    )
+    # 変換タイプの選択肢
+    transformation_types = {
+        "none": "変換なし",
+        "log": "対数変換",
+        "diff": "差分化",
+        "log_diff": "対数変換後に差分化",
+    }
 
-    # 標準化スイッチ
-    standardization_switch = ft.Switch(
-        label="標準化",
-        value=False,
-    )
-
-    # 変数選択用のチェックボックスリスト
+    # 変数選択用のチェックボックスと変換タイプ選択用のドロップダウンを保持するコンテナ
     variable_checkboxes = ft.Column(
         scroll=ft.ScrollMode.AUTO,
-        height=300,
-        spacing=10,
+        height=300,  # 固定高さを設定
+        spacing=5,
     )
 
     # グラフ表示用のコンテナ
     graph_container = ft.Column(
         scroll=ft.ScrollMode.AUTO,
-        spacing=20,
         expand=True,
+        spacing=10,
     )
 
-    # ステータスメッセージ用のテキスト
-    status_text = ft.Text(
-        "変数を選択し、「グラフを表示」ボタンを押してください。",
-        size=14,
-        color=ft.Colors.GREY_700,
-    )
+    # ステータス表示用のテキスト
+    status_text = ft.Text("", size=12, color=ft.Colors.RED)
 
-    def initialize_checkboxes():
-        """チェックボックスの初期化"""
-        variable_checkboxes.controls.clear()
-        for col in all_columns:
+    def initialize_variable_controls():
+        """変数選択用のコントロールを初期化"""
+        global checkbox_states, transformation_states, standardization_states
+
+        # データベースからカラム一覧を取得
+        df = read_dataframe_from_sqlite("merged_data")
+        if df is None or df.empty:
+            print("DEBUG: データが存在しません。")
+            return
+
+        # kijyunnengetu以外のカラムを取得
+        columns = [col for col in df.columns if col != "kijyunnengetu"]
+
+        # 各変数のコントロールを生成
+        controls = []
+        for col in columns:
+            # 初期状態の設定
+            if col not in checkbox_states:
+                checkbox_states[col] = False
+            if col not in transformation_states:
+                transformation_states[col] = "none"
+            if col not in standardization_states:
+                standardization_states[col] = False
+
+            # 変数名の表示
+            variable_name = ft.Text(col, size=14)
+
+            # チェックボックス
             checkbox = ft.Checkbox(
-                label=col,
-                value=checkbox_states.get(col, False),
+                value=checkbox_states[col],
                 on_change=lambda e, col=col: handle_checkbox_change(e, col),
             )
-            variable_checkboxes.controls.append(checkbox)
+
+            # 変換タイプ選択用ドロップダウン
+            transformation_dropdown = ft.Dropdown(
+                label="変換タイプ",
+                options=[
+                    ft.dropdown.Option(key, value)
+                    for key, value in transformation_types.items()
+                ],
+                value=transformation_states[col],
+                width=150,
+                on_change=lambda e, col=col: handle_transformation_change(e, col),
+            )
+
+            # 標準化スイッチ
+            standardization_switch = ft.Switch(
+                label="標準化",
+                value=standardization_states[col],
+                on_change=lambda e, col=col: handle_standardization_change(e, col),
+            )
+
+            # 変数ごとのコントロールを横に並べる
+            row = ft.Row(
+                [
+                    checkbox,
+                    variable_name,
+                    transformation_dropdown,
+                    standardization_switch,
+                ],
+                alignment=ft.MainAxisAlignment.START,
+                spacing=10,
+            )
+
+            # コントロールをコンテナに追加
+            container = ft.Container(
+                content=row,
+                padding=ft.padding.only(left=10, right=10, top=5, bottom=5),
+                border=ft.border.only(
+                    bottom=ft.border.BorderSide(1, ft.Colors.GREY_300)
+                ),
+            )
+            controls.append(container)
+
+        variable_checkboxes.controls = controls
         page.update()
 
     def handle_checkbox_change(e: ft.ControlEvent, column: str):
         """チェックボックスの状態変更を処理"""
+        global checkbox_states
         checkbox_states[column] = e.control.value
-        # チェックボックスの状態変更時はグラフを更新しない
-        status_text.value = "変数の選択が変更されました。「グラフを表示」ボタンを押して更新してください。"
-        page.update()
+        print(f"DEBUG: チェックボックス変更 - {column}: {e.control.value}")
 
-    def update_graphs(e=None):
+    def handle_transformation_change(e: ft.ControlEvent, column: str):
+        """変換タイプの変更を処理"""
+        global transformation_states
+        transformation_states[column] = e.control.value
+        print(f"DEBUG: 変換タイプ変更 - {column}: {e.control.value}")
+
+    def handle_standardization_change(e: ft.ControlEvent, column: str):
+        """標準化の変更を処理"""
+        global standardization_states
+        standardization_states[column] = e.control.value
+        print(f"DEBUG: 標準化変更 - {column}: {e.control.value}")
+
+    def update_graphs(e: ft.ControlEvent):
         """選択された変数のグラフを更新"""
-        # 選択された変数を取得
-        selected_variables = [
-            col for col, is_checked in checkbox_states.items() if is_checked
-        ]
+        # グラフコンテナをクリア
+        graph_container.controls.clear()
+        status_text.value = ""
 
-        if not selected_variables:
-            status_text.value = "表示する変数を選択してください。"
-            status_text.color = ft.Colors.RED_400
+        # 選択された変数を取得
+        selected_columns = [col for col, checked in checkbox_states.items() if checked]
+        if not selected_columns:
+            status_text.value = "変数を1つ以上選択してください。"
             page.update()
             return
 
-        status_text.value = "グラフを生成中..."
-        status_text.color = ft.Colors.BLUE_400
-        page.update()
-
         try:
-            graph_container.controls.clear()
-
-            # 現在の設定を取得
-            transformation = transformation_dropdown.value
-            is_standardized = standardization_switch.value
-
-            # データフレームを取得
-            df = get_dataframe_for_pattern(transformation, is_standardized)
-            if df is None or df.empty:
-                status_text.value = "データの読み込みに失敗しました。"
-                status_text.color = ft.Colors.RED_400
-                page.update()
-                return
-
-            # グラフを3列で表示するための行コンテナ
+            # 現在の行のコンテナ
             current_row = ft.Row(
                 controls=[],
-                spacing=10,  # 間隔を縮小
                 alignment=ft.MainAxisAlignment.START,
+                spacing=10,
             )
-            graph_container.controls.append(current_row)
+            row_count = 0
 
-            # 選択された変数のグラフを生成
-            for i, col in enumerate(selected_variables):
+            # 各変数のグラフを生成
+            for col in selected_columns:
+                # 変換タイプと標準化の設定を取得
+                transformation = transformation_states[col]
+                is_standardized = standardization_states[col]
+
+                # データを取得
+                df = get_dataframe_for_pattern(transformation, is_standardized)
+                if df is None:
+                    status_text.value = f"エラー: {col}のデータを取得できませんでした。"
+                    continue
+
                 try:
-                    # 3列ごとに新しい行を作成
-                    if i > 0 and i % 3 == 0:
-                        current_row = ft.Row(
-                            controls=[],
-                            spacing=10,  # 間隔を縮小
-                            alignment=ft.MainAxisAlignment.START,
-                        )
-                        graph_container.controls.append(current_row)
-
-                    # グラフを生成して一時ファイルに保存
-                    filepath = plot_single_time_series(
+                    # グラフを生成
+                    graph_path = plot_single_time_series(
                         df, col, transformation, is_standardized
                     )
 
-                    # グラフを表示（幅を調整して3列に収まるようにする）
-                    current_row.controls.append(
-                        ft.Container(
-                            content=ft.Column(
-                                [
-                                    ft.Text(
-                                        f"{col}の時系列推移",
-                                        size=12,  # フォントサイズを縮小
-                                        weight=ft.FontWeight.BOLD,
-                                    ),
-                                    ft.Image(
-                                        src=filepath,
-                                        width=280,  # グラフの幅を縮小
-                                        height=200,  # グラフの高さを縮小
-                                        fit=ft.ImageFit.CONTAIN,
-                                    ),
-                                ],
-                                spacing=5,  # 間隔を縮小
-                                horizontal_alignment=ft.CrossAxisAlignment.CENTER,
-                            ),
-                            padding=5,  # パディングを縮小
-                            border=ft.border.all(1, ft.Colors.GREY_400),
-                            border_radius=5,
-                            width=290,  # コンテナの幅を調整
-                        )
+                    # グラフを表示
+                    graph_image = ft.Image(
+                        src=graph_path,
+                        width=280,
+                        height=200,
+                        fit=ft.ImageFit.CONTAIN,
                     )
+
+                    # グラフのタイトル
+                    graph_title = ft.Text(
+                        f"{col}\n{TRANSFORMATION_TYPES[transformation]}"
+                        + (" (標準化済み)" if is_standardized else ""),
+                        size=12,
+                        text_align=ft.TextAlign.CENTER,
+                    )
+
+                    # グラフとタイトルを縦に並べる
+                    graph_column = ft.Column(
+                        [graph_title, graph_image],
+                        horizontal_alignment=ft.CrossAxisAlignment.CENTER,
+                        spacing=5,
+                    )
+
+                    # グラフをコンテナで包む
+                    graph_container_item = ft.Container(
+                        content=graph_column,
+                        width=290,
+                        padding=5,
+                        border=ft.border.all(1, ft.Colors.GREY_300),
+                        border_radius=5,
+                    )
+
+                    # 3列ごとに新しい行を作成
+                    if row_count % 3 == 0:
+                        current_row = ft.Row(
+                            controls=[],
+                            alignment=ft.MainAxisAlignment.START,
+                            spacing=10,
+                        )
+                        graph_container.controls.append(current_row)
+
+                    current_row.controls.append(graph_container_item)
+                    row_count += 1
 
                 except Exception as e:
-                    print(f"DEBUG: グラフの生成に失敗しました ({col}): {e}")
-                    status_text.value = (
-                        f"グラフの生成中にエラーが発生しました: {str(e)}"
-                    )
-                    status_text.color = ft.Colors.RED_400
-                    page.update()
-                    return
+                    print(f"DEBUG: グラフ生成エラー ({col}): {str(e)}")
+                    status_text.value = f"エラー: {col}のグラフ生成に失敗しました。"
+                    continue
 
-            # 最後の行が3列未満の場合、空のコンテナを追加してレイアウトを整える
-            if len(current_row.controls) < 3:
-                remaining_slots = 3 - len(current_row.controls)
-                for _ in range(remaining_slots):
-                    current_row.controls.append(
-                        ft.Container(
-                            width=290,
-                            height=0,
-                        )
-                    )
-
-            status_text.value = f"{len(selected_variables)}個のグラフを表示しました。"
-            status_text.color = ft.Colors.GREEN_400
+            if not graph_container.controls:
+                status_text.value = "グラフを生成できませんでした。"
 
         except Exception as e:
-            print(f"DEBUG: グラフの更新に失敗しました: {e}")
-            status_text.value = f"グラフの更新に失敗しました: {str(e)}"
-            status_text.color = ft.Colors.RED_400
+            print(f"DEBUG: グラフ更新エラー: {str(e)}")
+            status_text.value = f"エラー: グラフの更新に失敗しました。"
 
         page.update()
 
-    # 表示ボタン
-    show_graphs_button = ft.ElevatedButton(
+    def clear_graphs(e: ft.ControlEvent):
+        """グラフをクリア"""
+        graph_container.controls.clear()
+        status_text.value = "グラフをクリアしました。"
+        page.update()
+
+    # 変数選択用のコントロールを初期化
+    initialize_variable_controls()
+
+    # グラフ表示ボタン
+    show_graph_button = ft.ElevatedButton(
         "グラフを表示",
-        icon=ft.Icons.PLAY_ARROW_ROUNDED,
         on_click=update_graphs,
     )
 
-    # クリアボタン
-    def clear_graphs(e):
-        graph_container.controls.clear()
-        status_text.value = "グラフをクリアしました。"
-        status_text.color = ft.Colors.GREY_700
-        page.update()
-
-    clear_button = ft.ElevatedButton(
+    # グラフクリアボタン
+    clear_graph_button = ft.ElevatedButton(
         "グラフをクリア",
-        icon=ft.Icons.CLEAR_ALL_ROUNDED,
         on_click=clear_graphs,
     )
 
-    # チェックボックスの初期化
-    initialize_checkboxes()
-
-    # ページのレイアウトを構築
-    return ft.Container(
+    # 左側のパネル（変数選択）
+    left_panel = ft.Container(
         content=ft.Column(
             [
+                ft.Text("変数選択", size=16, weight=ft.FontWeight.BOLD),
+                variable_checkboxes,
                 ft.Row(
-                    [
-                        # 左側の設定パネル（固定幅）
-                        ft.Container(
-                            content=ft.Column(
-                                [
-                                    ft.Text(
-                                        "変換設定", size=16, weight=ft.FontWeight.BOLD
-                                    ),
-                                    transformation_dropdown,
-                                    standardization_switch,
-                                    ft.Divider(),
-                                    ft.Text(
-                                        "変数選択", size=16, weight=ft.FontWeight.BOLD
-                                    ),
-                                    ft.Container(  # 変数選択部分をスクロール可能に
-                                        content=ft.Column(
-                                            [variable_checkboxes],
-                                            scroll=ft.ScrollMode.AUTO,  # スクロール可能に
-                                        ),
-                                        height=300,  # 高さを固定
-                                        border=ft.border.all(1, ft.Colors.GREY_300),
-                                        border_radius=5,
-                                    ),
-                                    ft.Divider(),
-                                    ft.Row(
-                                        [show_graphs_button, clear_button],
-                                        spacing=10,
-                                    ),
-                                ],
-                                spacing=20,
-                            ),
-                            padding=20,
-                            border=ft.border.all(1, ft.Colors.GREY_400),
-                            border_radius=5,
-                            width=300,  # 幅を固定
-                            alignment=ft.alignment.top_left,  # 上揃え
-                        ),
-                        # 右側のグラフ表示エリア（スクロール可能）
-                        ft.Container(
-                            content=ft.Column(
-                                [
-                                    status_text,
-                                    ft.Column(  # グラフコンテナをColumnでラップ
-                                        [graph_container],
-                                        scroll=ft.ScrollMode.AUTO,  # スクロール可能に
-                                        expand=True,
-                                    ),
-                                ],
-                                spacing=20,
-                            ),
-                            padding=20,
-                            expand=True,
-                            alignment=ft.alignment.top_left,  # 上揃え
-                        ),
-                    ],
-                    spacing=20,
-                    alignment=ft.MainAxisAlignment.START,  # 上揃え
+                    [show_graph_button, clear_graph_button],
+                    alignment=ft.MainAxisAlignment.START,
+                    spacing=10,
                 ),
+                status_text,
             ],
+            spacing=10,
+        ),
+        width=300,
+        padding=10,
+        border=ft.border.all(1, ft.Colors.GREY_300),
+        border_radius=5,
+    )
+
+    # 右側のパネル（グラフ表示）
+    right_panel = ft.Container(
+        content=graph_container,
+        expand=True,
+        padding=10,
+        border=ft.border.all(1, ft.Colors.GREY_300),
+        border_radius=5,
+    )
+
+    # メインのレイアウト
+    return ft.Container(
+        content=ft.Row(
+            [left_panel, right_panel],
+            alignment=ft.MainAxisAlignment.START,
+            spacing=20,
             expand=True,
         ),
+        padding=20,
         expand=True,
     )
