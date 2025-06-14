@@ -7,3 +7,4 @@ components/__pycache__
 db/__pycache__
 db/regression_data.db
 database.db
+utils/__pycache__
