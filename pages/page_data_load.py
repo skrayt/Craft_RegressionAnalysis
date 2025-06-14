@@ -2,6 +2,10 @@ import os
 import flet as ft
 import pandas as pd
 import numpy as np
+import matplotlib.pyplot as plt
+import seaborn as sns
+import io
+import base64
 
 # import sqlite3 # db/database.pyからインポートするため削除
 from sklearn.preprocessing import StandardScaler
@@ -308,12 +312,42 @@ def initialize_data_from_db_or_csv(page: ft.Page):
         load_initial_csv_data(page)
 
 
+def plot_time_series(df: pd.DataFrame, selected_columns: list[str]) -> str:
+    """
+    選択された列の時系列データをプロットし、base64エンコードされた画像を返す
+    """
+    plt.figure(figsize=(12, 6))
+    for col in selected_columns:
+        plt.plot(df["kijyunnengetu"], df[col], label=col)
+
+    plt.title("時系列データの推移")
+    plt.xlabel("年月")
+    plt.ylabel("値")
+    plt.legend()
+    plt.xticks(rotation=45)
+    plt.tight_layout()
+
+    # グラフをbase64エンコード
+    buf = io.BytesIO()
+    plt.savefig(buf, format="png")
+    buf.seek(0)
+    plt.close()
+    return base64.b64encode(buf.getvalue()).decode()
+
+
 def data_load_page(page: ft.Page):
     page.title = "データベース整備ツール"
 
     global checkbox_states, data_table, standardized_data_table
 
     print(f"DEBUG: data_load_page関数が呼び出されました。")
+
+    # 初期データの読み込み
+    initial_df = read_dataframe_from_sqlite("merged_data")
+    if initial_df is not None and not initial_df.empty:
+        all_columns = initial_df.columns.tolist()
+    else:
+        all_columns = []
 
     # 変換タイプの選択肢
     transformation_types = {
@@ -615,7 +649,7 @@ def data_load_page(page: ft.Page):
                     expand=0.5,
                 ),
                 ft.Divider(),
-                content_container,  # シンプルにcontent_containerを使用
+                content_container,  # 時系列表示コンテナを削除
             ],
             expand=True,
         ),
