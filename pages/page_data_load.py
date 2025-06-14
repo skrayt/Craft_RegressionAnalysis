@@ -5,6 +5,10 @@ import numpy as np
 
 # import sqlite3 # db/database.pyからインポートするため削除
 from sklearn.preprocessing import StandardScaler
+from utils.data_transformation import (
+    standardize_data,
+    apply_transformations,
+)  # 新しいモジュールからインポート
 from .page_column_management import column_management_page
 from db.database import (  # db.databaseからインポート
     initialize_user_data_database,
@@ -13,11 +17,7 @@ from db.database import (  # db.databaseからインポート
     sanitize_column_name,  # これも一応インポートしておく
 )
 
-# SQLiteデータベースファイルのパス
-# DATABASE_FILE = "database.db" # db.databaseで管理するため削除
 
-# グローバル変数
-# merged_dfとsaved_dfはAppDataクラスで管理するため削除
 checkbox_states = {}  # チェックボックスの状態を保持するグローバル辞書
 data_table = ft.DataTable(columns=[])  # データ表示用テーブルをグローバルにする
 standardized_data_table = ft.DataTable(
@@ -63,81 +63,6 @@ def get_merged_df(page: ft.Page):
     # merged_dfはpage.app_data経由でアクセス
     print(f"DEBUG: get_merged_df called. page.app_data.merged_df type: {type(page.app_data.merged_df)}, is None: {page.app_data.merged_df is None}")  # type: ignore
     return page.app_data.merged_df  # type: ignore
-
-
-# SQLiteデータベースを初期化する関数
-# initialize_databaseはdb/database.pyにinitialize_user_data_databaseとして移動
-# def initialize_database():
-#     conn = sqlite3.connect(DATABASE_FILE)
-#     cursor = conn.cursor()
-#     cursor.execute(
-#         """
-#         CREATE TABLE IF NOT EXISTS data (
-#             kijyunnengetu TEXT,
-#             column1 REAL,
-#             column2 REAL
-#         )
-#     """
-#     )
-#     conn.commit()
-#     conn.close()
-
-
-# SQLiteデータベースからデータを読み込む関数
-# load_databaseはdb/database.pyにread_dataframe_from_sqliteとして移動
-# def load_database():
-#     conn = sqlite3.connect(DATABASE_FILE)
-#     try:
-#         df = pd.read_sql("SELECT * FROM data", conn)
-#     except sqlite3.Error:
-#         df = None
-#     finally:
-#         conn.close()
-#     return df
-
-
-# SQLiteデータベースにデータを保存する関数
-# sanitize_column_nameとsave_databaseはdb/database.pyに移動
-# def sanitize_column_name(col_name: str) -> str:
-#     """
-#     カラム名をSQLiteで使用可能な形式に変換する
-#     """
-#     # 特殊文字をアンダースコアに置換（括弧、スペース、その他の特殊文字）
-#     sanitized = "".join(c if c.isalnum() or c == "_" else "_" for c in str(col_name))
-#     # 連続するアンダースコアを1つに
-#     while "__" in sanitized:
-#         sanitized = sanitized.replace("__", "_")
-#     # 先頭と末尾のアンダースコアを削除
-#     sanitized = sanitized.strip("_")
-#     # 先頭が数字の場合は'col_'を付加
-#     if sanitized and sanitized[0].isdigit():  # sanitizedが空でないことを確認
-#         sanitized = "col_" + sanitized
-#     # 空文字列の場合は'col'を返す
-#     if not sanitized:
-#         sanitized = "col"
-#     return sanitized
-
-
-# def save_database(df):
-#     conn = sqlite3.connect(DATABASE_FILE)
-#     try:
-#         # カラム名をSQLiteで使用可能な形式に変換
-#         df = df.copy()
-#         original_columns = list(df.columns)
-#         df.columns = [sanitize_column_name(col) for col in df.columns]
-#         print("変換前のカラム名:", original_columns)
-#         print("変換後のカラム名:", list(df.columns))
-
-#         # テーブルが存在する場合は削除
-#         conn.execute("DROP TABLE IF EXISTS data")
-#         # 新しいテーブルを作成してデータを保存
-#         df.to_sql("data", conn, if_exists="replace", index=False)
-#         conn.commit()
-#     except Exception as e:
-#         conn.rollback()
-#         raise e
-#     finally:
-#         conn.close()
 
 
 # 対数変換、差分化、対数変換後に差分化を適用する関数
@@ -399,10 +324,15 @@ def data_load_page(page: ft.Page):
     }
 
     # データ表示用のコンテナ
+    # コンテンツ表示用のコンテナ
+    lv = ft.ListView(
+        controls=[data_table],  # 初期表示は元データ
+        horizontal=True,
+    )
     content_container = ft.Container(
-        content=data_table,
-        width=1200,
-        height=300,
+        content=lv,
+        # width=1500,
+        # height=1000,
         bgcolor=ft.Colors.WHITE,
         border=ft.border.all(1, ft.Colors.GREY_300),
         alignment=ft.alignment.top_left,
@@ -572,6 +502,7 @@ def data_load_page(page: ft.Page):
                     ],
                     alignment=ft.MainAxisAlignment.START,
                     spacing=20,
+                    expand=0.5,
                 ),
                 ft.Divider(),
                 ft.Row(
@@ -581,12 +512,16 @@ def data_load_page(page: ft.Page):
                     ],
                     alignment=ft.MainAxisAlignment.START,
                     spacing=20,
+                    expand=0.5,
                 ),
                 ft.Divider(),
-                content_container,
+                ft.Row(
+                    controls=[content_container],
+                    expand=9,
+                ),
             ],
             scroll=ft.ScrollMode.AUTO,
-            expand=True,
+            expand=False,
         ),
         expand=True,
     )

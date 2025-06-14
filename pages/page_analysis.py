@@ -11,8 +11,8 @@ import numpy as np
 from db.database import read_dataframe_from_sqlite
 from components.plot_utils import (
     plot_corr_heatmap,
-    plot_vif_heatmap,
-    calculate_vif,
+    # plot_vif_heatmap,
+    # calculate_vif,
     create_vif_table,
 )
 
@@ -26,6 +26,18 @@ TRANSFORMATION_PATTERNS = {
     "diff_standardized": "差分化（標準化）",
     "log_diff": "対数変換後に差分化",
     "log_diff_standardized": "対数変換後に差分化（標準化）",
+}
+
+# 変換パターンに応じたサフィックスを定義
+TRANSFORMATION_SUFFIXES = {
+    "none": "",
+    "none_standardized": "_std",
+    "log": "_log",
+    "log_standardized": "_log_std",
+    "diff": "_diff",
+    "diff_standardized": "_diff_std",
+    "log_diff": "_log_diff",
+    "log_diff_standardized": "_log_diff_std",
 }
 
 
@@ -133,102 +145,145 @@ def analysis_page(page: ft.Page) -> ft.Container:
                 )
         page.update()
 
-    def run_correlation():
-        selected = target_selector.value
-        if not selected:
+    def run_correlation(target_column):
+        if not target_column:
+            print(f"target_columnはnullです:")
             return
 
         # 目的変数のデータを取得
         target_df = get_dataframe_for_pattern(target_pattern.value)
-        target_data = target_df[selected]
+        if target_column not in target_df.columns:
+            print(f"目的変数'{target_column}'がデータフレームに存在しません")
+            return
+        target_data = target_df[["kijyunnengetu", target_column]]
+        print(target_data)
 
         # 選択された説明変数とその変換パターンを取得
         selected_features = []
         feature_dfs = []
+        feature_data = pd.DataFrame()
 
         for control in features_available.controls:
-            if isinstance(control, ft.Column):
+            if isinstance(control, ft.Row):
                 checkbox = control.controls[0]
                 pattern_dropdown = control.controls[1]
                 if checkbox.value:
                     feature_name = checkbox.label
-                    pattern = pattern_dropdown.value
+                    pattern = (
+                        pattern_dropdown.value
+                    )  # 現在の説明変数の変換パターンを取得
+                    feature_suffix = TRANSFORMATION_SUFFIXES.get(pattern, "")
+                    feature_column = f"{feature_name}{feature_suffix}"
+
                     feature_df = get_dataframe_for_pattern(pattern)
-                    selected_features.append(feature_name)
-                    feature_dfs.append(feature_df[feature_name])
+                    print(f"feature_df:{feature_df.columns}")
+                    if feature_column not in feature_df.columns:
+                        print(
+                            f"説明変数'{feature_column}'がデータフレームに存在しません"
+                        )
+                        continue
 
-        if not selected_features:
-            return
+                    # 'kijyunnengetu'と'feature_column'のカラムをデータフレームへ
+                    df = feature_df[["kijyunnengetu", feature_column]]
 
-        # すべてのデータを結合
-        combined_df = pd.concat([target_data] + feature_dfs, axis=1)
-        combined_df.columns = [selected] + selected_features
+                    # 説明変数をfeature_dataに格納して、kijyunnengetuでinner結合
+                    if feature_data.shape[0] > 1:
+                        feature_data = pd.merge(
+                            feature_data, df, on="kijyunnengetu", how="inner"
+                        )
+                    else:
+                        feature_data = df
+                    selected_features.append(feature_column)
+                    print(feature_data.columns)
+
+        # 'kijyunnengetu'をキーにしてデータフレームを結合
+        combined_df = pd.merge(
+            target_data, feature_data, on="kijyunnengetu", how="inner"
+        )
+        print(f"combined_df:{pd.DataFrame(combined_df).columns}")
+
+        # kijyunnengetuを削除して分析用データフレームを作成
+        analyisis_df = combined_df.drop(columns="kijyunnengetu")
 
         # 相関ヒートマップを作成
         corr_heatmap_image.src_base64 = plot_corr_heatmap(
-            combined_df, selected, selected_features
+            analyisis_df, target_column, selected_features
         )
 
         # VIFクロステーブルを作成
         vif_table.columns, vif_table.rows = create_vif_table(
-            combined_df, selected_features
+            analyisis_df, selected_features
         )
+        print(f"combined_df:{combined_df}")
         page.update()
 
-    return ft.Container(
-        content=ft.Row(
-            [
-                ft.Column(
-                    [
-                        ft.Text("相関係数分析", size=20, weight=ft.FontWeight.BOLD),
-                        ft.Divider(),
-                        ft.Text("目的変数の設定", size=16),
-                        ft.Row(
-                            [
-                                target_selector,
-                                target_pattern,
-                            ],
-                            alignment=ft.MainAxisAlignment.START,
-                            spacing=10,
-                        ),
-                        ft.Divider(),
-                        ft.Text("説明変数の設定", size=16),
-                        ft.Text(
-                            "※目的変数に選択した項目は説明変数から除外されます",
-                            size=12,
-                            color=ft.Colors.GREY_600,
-                        ),
-                        ft.Row(
-                            [
-                                ft.Column(
-                                    [features_available],
-                                    scroll=ft.ScrollMode.AUTO,
-                                ),
-                            ],
-                        ),
-                        ft.ElevatedButton(
-                            "相関係数/VIFを表示",
-                            on_click=lambda e: run_correlation(),
-                            style=ft.ButtonStyle(
-                                color=ft.Colors.WHITE,
-                                bgcolor=ft.Colors.BLUE,
-                            ),
-                        ),
-                    ],
-                    expand=1,
-                    scroll=ft.ScrollMode.AUTO,
+    # ページタイトル
+    header_parts = ft.Row(
+        [
+            ft.Text("相関係数分析", size=20, weight=ft.FontWeight.BOLD),
+            ft.Divider(),
+        ]
+    )
+    # 変数の選択と結果表示ボタン
+    controller_parts = ft.Column(
+        [
+            ft.Text("目的変数の設定", size=16),
+            ft.Row(
+                [
+                    target_selector,
+                    target_pattern,
+                ],
+                alignment=ft.MainAxisAlignment.START,
+                spacing=10,
+            ),
+            ft.Divider(),
+            ft.Text("説明変数の設定", size=16),
+            ft.Text(
+                "※目的変数に選択した項目は説明変数から除外されます",
+                size=12,
+                color=ft.Colors.GREY_600,
+            ),
+            ft.Row(
+                [features_available],
+                scroll=ft.ScrollMode.AUTO,
+            ),
+            ft.ElevatedButton(
+                "相関係数/VIFを表示",
+                on_click=lambda e: run_correlation(
+                    f"{target_selector.value}{TRANSFORMATION_SUFFIXES.get(target_pattern.value,'')}"
                 ),
-                ft.Column(
-                    [
-                        ft.Text("相関ヒートマップ", size=16, weight=ft.FontWeight.BOLD),
-                        corr_heatmap_image,
-                        ft.Divider(),
-                        ft.Text("VIF値", size=16, weight=ft.FontWeight.BOLD),
-                        vif_table,
-                    ],
-                    expand=4,
-                    spacing=20,
-                    scroll=ft.ScrollMode.AUTO,
+                style=ft.ButtonStyle(
+                    color=ft.Colors.WHITE,
+                    bgcolor=ft.Colors.BLUE,
+                ),
+            ),
+        ],
+        expand=1,
+        scroll=ft.ScrollMode.AUTO,
+        alignment=ft.MainAxisAlignment.START,
+    )
+
+    result_parts = ft.Column(
+        [
+            ft.Text("相関ヒートマップ", size=16, weight=ft.FontWeight.BOLD),
+            corr_heatmap_image,
+            ft.Divider(),
+            ft.Text("VIF値", size=16, weight=ft.FontWeight.BOLD),
+            vif_table,
+        ],
+        expand=4,
+        spacing=20,
+        scroll=ft.ScrollMode.AUTO,
+        alignment=ft.MainAxisAlignment.START,
+    )
+
+    return ft.Container(
+        content=ft.Column(
+            [
+                header_parts,
+                ft.Row(
+                    [ft.Column([controller_parts]), ft.Column([result_parts])],
+                    vertical_alignment=ft.CrossAxisAlignment.START,
                 ),
             ]
         ),
