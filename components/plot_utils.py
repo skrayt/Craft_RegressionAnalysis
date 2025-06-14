@@ -3,6 +3,7 @@
 #
 # 現在は、複数の時系列データをプロットし、base64形式で返す関数を含む。
 """
+
 import flet as ft
 from io import BytesIO
 import base64
@@ -11,7 +12,8 @@ import pandas as pd
 import numpy as np
 import seaborn as sns
 from statsmodels.stats.outliers_influence import variance_inflation_factor
-from statsmodels.stats.stattools import durbin_watson,jarque_bera
+from statsmodels.stats.stattools import durbin_watson, jarque_bera
+from math import ceil
 
 # seabornの日本語文字化け防止にフォントを指定する
 sns.set(font="Yu Gothic")
@@ -51,7 +53,7 @@ def plot_corr_heatmap(df: pd.DataFrame, target: str, features: list[str]) -> str
     fig, ax = plt.subplots(figsize=figsize)
     sns.heatmap(
         corr, annot=True, cmap="coolwarm", cbar=True, fmt=".2f", ax=ax
-    )# , square=True
+    )  # , square=True
     plt.title("相関行列のヒートマップ")
     plt.xticks(rotation=60)
     plt.tight_layout()
@@ -232,15 +234,19 @@ def create_vif_table(df, selected_features):
 
 def regression_summary_table(model):
     # summary2().tables[0] を使用してモデル概要情報を取得
-    model_summary_table = model.summary2().tables[0]  # モデル全体の概要情報が含まれるテーブル
+    model_summary_table = model.summary2().tables[
+        0
+    ]  # モデル全体の概要情報が含まれるテーブル
 
     # 日本語で分かりやすい表形式に変換
     summary_data = []
     for index, row in model_summary_table.iterrows():
-        summary_data.append({
-            "項目": row[0],  # 項目名（例: R-squared, Adj. R-squared）
-            "値": row[1],  # 値
-        })
+        summary_data.append(
+            {
+                "項目": row[0],  # 項目名（例: R-squared, Adj. R-squared）
+                "値": row[1],  # 値
+            }
+        )
 
     # 表形式で表示するための DataTable を作成
     summary_table = ft.DataTable(
@@ -252,7 +258,13 @@ def regression_summary_table(model):
             ft.DataRow(
                 cells=[
                     ft.DataCell(ft.Text(row["項目"])),
-                    ft.DataCell(ft.Text(f"{row['値']:.4f}" if isinstance(row["値"], (int, float)) else str(row["値"]))),
+                    ft.DataCell(
+                        ft.Text(
+                            f"{row['値']:.4f}"
+                            if isinstance(row["値"], (int, float))
+                            else str(row["値"])
+                        )
+                    ),
                 ]
             )
             for row in summary_data
@@ -268,15 +280,19 @@ def regression_stats_table(model):
     # 日本語で分かりやすい表形式に変換
     stats_data = []
     for index, row in coef_table.iterrows():
-        stats_data.append({
-            "項目": "定数項" if index == "const" else index,  # const を「定数項」に変換
-            "回帰係数": row["Coef."],  # 回帰係数
-            "標準誤差": row["Std.Err."],  # 標準誤差
-            "t値": row["t"],  # t値
-            "P値": row["P>|t|"],  # P値
-            "95%信頼区間\n下限": row["[0.025"],  # 95%信頼区間の下限
-            "95%信頼区間\n上限": row["0.975]"],  # 95%信頼区間の上限
-        })
+        stats_data.append(
+            {
+                "項目": (
+                    "定数項" if index == "const" else index
+                ),  # const を「定数項」に変換
+                "回帰係数": row["Coef."],  # 回帰係数
+                "標準誤差": row["Std.Err."],  # 標準誤差
+                "t値": row["t"],  # t値
+                "P値": row["P>|t|"],  # P値
+                "95%信頼区間\n下限": row["[0.025"],  # 95%信頼区間の下限
+                "95%信頼区間\n上限": row["0.975]"],  # 95%信頼区間の上限
+            }
+        )
 
     # 表形式で表示するための DataTable を作成
     stats_table = ft.DataTable(
@@ -339,22 +355,179 @@ def regression_diagnostics_table(model):
     )
     return diagnostics_table
 
+
 def vif_table(vif_data: pd.DataFrame) -> ft.DataTable:
     """
     VIF値を表形式で表示するためのflet DataTableを作成する。
     """
     return ft.DataTable(
         columns=[
-            ft.DataColumn(ft.Text('Feature')),
-            ft.DataColumn(ft.Text('VIF')),
+            ft.DataColumn(ft.Text("Feature")),
+            ft.DataColumn(ft.Text("VIF")),
         ],
         rows=[
             ft.DataRow(
                 cells=[
-                    ft.DataCell(ft.Text(row['Feature'])),
+                    ft.DataCell(ft.Text(row["Feature"])),
                     ft.DataCell(ft.Text(f"{row['VIF']:.3f}")),
                 ]
             )
             for _, row in vif_data.iterrows()
         ],
     )
+
+
+def plot_single_time_series(
+    df: pd.DataFrame,
+    column: str,
+    transformation_type: str,
+    is_standardized: bool,
+    figsize: tuple = (10, 4),
+) -> str:
+    """
+    単一の時系列データをプロットし、Base64エンコードされた画像を返す
+
+    Args:
+        df (pd.DataFrame): データフレーム
+        column (str): プロットするカラム名
+        transformation_type (str): 変換タイプ（"none", "log", "diff", "log_diff"）
+        is_standardized (bool): 標準化するかどうか
+        figsize (tuple): グラフのサイズ
+
+    Returns:
+        str: Base64エンコードされた画像データ
+    """
+    if (
+        df is None
+        or df.empty
+        or "kijyunnengetu" not in df.columns
+        or column not in df.columns
+    ):
+        return ""
+
+    # グラフタイトルを構築
+    title_parts = [column]
+    if transformation_type != "none":
+        title_parts.append(
+            f"({TRANSFORMATION_TYPES.get(transformation_type, transformation_type)})"
+        )
+    if is_standardized:
+        title_parts.append("(標準化済)")
+    plot_title = " ".join(title_parts)
+
+    # グラフを生成
+    fig, ax = plt.subplots(figsize=figsize)
+    ax.plot(
+        df["kijyunnengetu"],
+        df[column],
+        label=column,
+        color=sns.color_palette("deep")[0],
+    )
+
+    ax.set_title(plot_title, fontsize=12)
+    ax.set_xlabel("年月", fontsize=10)
+    ax.set_ylabel("値", fontsize=10)
+    ax.tick_params(axis="x", rotation=45, labelsize=8)
+    ax.tick_params(axis="y", labelsize=8)
+    ax.grid(True, linestyle="--", alpha=0.7)
+    ax.legend(fontsize=8)
+    plt.tight_layout()
+
+    # Base64エンコード
+    buf = BytesIO()
+    fig.savefig(buf, format="png", bbox_inches="tight", dpi=100)
+    buf.seek(0)
+    img_base64 = base64.b64encode(buf.getvalue()).decode()
+    plt.close(fig)
+
+    return img_base64
+
+
+def plot_multiple_time_series_grid(
+    df: pd.DataFrame,
+    columns: list[str],
+    transformation_types: dict[str, str],
+    standardization_states: dict[str, bool],
+    n_cols: int = 2,
+    figsize: tuple = (12, 4),
+) -> str:
+    """
+    複数の時系列データをグリッド形式でプロットし、Base64エンコードされた画像を返す
+
+    Args:
+        df (pd.DataFrame): データフレーム
+        columns (list[str]): プロットするカラム名のリスト
+        transformation_types (dict[str, str]): 各カラムの変換タイプ
+        standardization_states (dict[str, bool]): 各カラムの標準化状態
+        n_cols (int): グリッドの列数
+        figsize (tuple): 1つのグラフのサイズ
+
+    Returns:
+        str: Base64エンコードされた画像データ
+    """
+    if not columns:
+        return ""
+
+    n_rows = ceil(len(columns) / n_cols)
+    fig, axes = plt.subplots(n_rows, n_cols, figsize=(figsize[0], figsize[1] * n_rows))
+    if n_rows == 1:
+        axes = axes.reshape(1, -1)
+
+    # 各カラムのグラフをプロット
+    for idx, column in enumerate(columns):
+        row = idx // n_cols
+        col = idx % n_cols
+        transformation_type = transformation_types.get(column, "none")
+        is_standardized = standardization_states.get(column, False)
+
+        # グラフタイトルを構築
+        title_parts = [column]
+        if transformation_type != "none":
+            title_parts.append(
+                f"({TRANSFORMATION_TYPES.get(transformation_type, transformation_type)})"
+            )
+        if is_standardized:
+            title_parts.append("(標準化済)")
+        plot_title = " ".join(title_parts)
+
+        # グラフをプロット
+        axes[row, col].plot(
+            df["kijyunnengetu"],
+            df[column],
+            label=column,
+            color=sns.color_palette("deep")[0],
+        )
+
+        axes[row, col].set_title(plot_title, fontsize=12)
+        axes[row, col].set_xlabel("年月", fontsize=10)
+        axes[row, col].set_ylabel("値", fontsize=10)
+        axes[row, col].tick_params(axis="x", rotation=45, labelsize=8)
+        axes[row, col].tick_params(axis="y", labelsize=8)
+        axes[row, col].grid(True, linestyle="--", alpha=0.7)
+        axes[row, col].legend(fontsize=8)
+
+    # 未使用のサブプロットを非表示
+    for idx in range(len(columns), n_rows * n_cols):
+        row = idx // n_cols
+        col = idx % n_cols
+        axes[row, col].set_visible(False)
+
+    plt.tight_layout()
+
+    # Base64エンコード
+    buf = BytesIO()
+    fig.savefig(buf, format="png", bbox_inches="tight", dpi=100)
+    buf.seek(0)
+    img_base64 = base64.b64encode(buf.getvalue()).decode()
+    plt.close(fig)
+
+    return img_base64
+
+
+# 変換タイプの定義をグローバル変数として追加
+TRANSFORMATION_TYPES = {
+    "none": "変換なし",
+    "log": "対数変換",
+    "diff": "差分化",
+    "log_diff": "対数変換後に差分化",
+}
