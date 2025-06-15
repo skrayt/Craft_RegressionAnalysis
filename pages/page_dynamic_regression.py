@@ -740,9 +740,9 @@ def dynamic_regression_page(page: ft.Page) -> ft.Container:
                 ft.Container(
                     content=ft.Column(
                         [
-                            ft.Text(
-                                "【回帰分析結果】：", size=20, weight=ft.FontWeight.BOLD
-                            ),
+                            # ft.Text(
+                            #     "【回帰分析結果】：", size=20, weight=ft.FontWeight.BOLD
+                            # ),
                             result_column,
                         ]
                     ),
@@ -754,9 +754,9 @@ def dynamic_regression_page(page: ft.Page) -> ft.Container:
                 ft.Container(
                     content=ft.Column(
                         [
-                            ft.Text(
-                                "【詳細分析】：", size=20, weight=ft.FontWeight.BOLD
-                            ),
+                            # ft.Text(
+                            #     "【詳細分析】：", size=20, weight=ft.FontWeight.BOLD
+                            # ),
                             detail_column,
                         ]
                     ),
@@ -890,7 +890,7 @@ def run_dynamic_regression(
         result_column.controls.clear()
         result_column.controls.extend(
             [
-                ft.Text("【回帰分析結果】：", size=20, weight=ft.FontWeight.BOLD),
+                ft.Text("【回帰分析結果】", size=20, weight=ft.FontWeight.BOLD),
                 ft.Text(f"目的変数: {target}"),
                 ft.Text(f"説明変数: {', '.join(features)}"),
                 ft.Text(f"サンプル数: {len(y)}"),
@@ -899,10 +899,10 @@ def run_dynamic_regression(
                 ft.Text(f"F統計量: {model.fvalue:.4f}"),
                 ft.Text(f"F検定のp値: {model.f_pvalue:.4f}"),
                 ft.Divider(),
-                ft.Text("【係数】：", size=16, weight=ft.FontWeight.BOLD),
+                ft.Text("【係数】", size=16, weight=ft.FontWeight.BOLD),
                 regression_summary_table(model),
                 ft.Divider(),
-                ft.Text("【診断統計量】：", size=16, weight=ft.FontWeight.BOLD),
+                ft.Text("【診断統計量】", size=16, weight=ft.FontWeight.BOLD),
                 regression_diagnostics_table(model),
             ]
         )
@@ -911,12 +911,12 @@ def run_dynamic_regression(
         detail_column.controls.clear()
         detail_column.controls.extend(
             [
-                ft.Text("【詳細分析】：", size=20, weight=ft.FontWeight.BOLD),
+                ft.Text("【詳細分析】", size=20, weight=ft.FontWeight.BOLD),
                 ft.Container(
                     content=ft.Column(
                         [
                             ft.Text(
-                                "予測値と実測値の比較：",
+                                "予測値と実測値の比較",
                                 size=16,
                                 weight=ft.FontWeight.BOLD,
                             ),
@@ -936,9 +936,7 @@ def run_dynamic_regression(
                 ft.Container(
                     content=ft.Column(
                         [
-                            ft.Text(
-                                "残差プロット：", size=16, weight=ft.FontWeight.BOLD
-                            ),
+                            ft.Text("残差プロット", size=16, weight=ft.FontWeight.BOLD),
                             ft.Image(
                                 src_base64=plot_residuals(y.values, y_pred.values),
                                 width=600,
@@ -954,7 +952,7 @@ def run_dynamic_regression(
                     content=ft.Column(
                         [
                             ft.Text(
-                                "残差の自己相関：", size=16, weight=ft.FontWeight.BOLD
+                                "残差の自己相関", size=16, weight=ft.FontWeight.BOLD
                             ),
                             ft.Image(
                                 src_base64=plot_acf(residuals),
@@ -976,7 +974,7 @@ def run_dynamic_regression(
                 ft.Container(
                     content=ft.Column(
                         [
-                            ft.Text("VIF値：", size=16, weight=ft.FontWeight.BOLD),
+                            ft.Text("VIF値", size=16, weight=ft.FontWeight.BOLD),
                             vif_table(calculate_vif(X)),
                         ]
                     ),
