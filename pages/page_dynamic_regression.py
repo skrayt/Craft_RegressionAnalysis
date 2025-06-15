@@ -209,18 +209,25 @@ class LagSelector(ft.Container):
         self.max_lag_slider = ft.Slider(
             min=1,
             max=24,
+            divisions=23,  # 整数メモリを設定
             value=12,
-            label="最大ラグ次数: {value}",
+            label="{value}次",  # スライダーの値ラベル
             width=200,
             on_change=self._on_max_lag_change,
         )
+        self.max_lag_text = ft.Text(
+            "最大ラグ次数: 12次", size=14
+        )  # 現在の値を表示するテキスト
 
         # ラグ設定の詳細セクション
         self.lag_settings_column = ft.Column(
             controls=[
                 ft.Row([self.optimization_dropdown, self.optimize_button]),
                 ft.Text("最大ラグ次数の設定："),
-                self.max_lag_slider,
+                ft.Row(
+                    [self.max_lag_slider, self.max_lag_text],
+                    alignment=ft.MainAxisAlignment.START,
+                ),
                 ft.Divider(),
                 ft.Text("各変数のラグ次数設定：", size=16),
             ],
@@ -243,7 +250,9 @@ class LagSelector(ft.Container):
     def _on_max_lag_change(self, e):
         """最大ラグ次数の変更時の処理"""
         self.max_lag = int(e.control.value)
+        self.max_lag_text.value = f"最大ラグ次数: {self.max_lag}次"
         self._update_lag_ui()
+        self.page.update()
 
     def _optimize_lag_order(self, e):
         """ラグ次数の最適化を実行"""
@@ -289,21 +298,37 @@ class LagSelector(ft.Container):
         if self.include_lag and self.lag_settings:
             # 各変数のラグ設定を表示
             for feature in self.lag_settings.keys():
+                # 現在のラグ次数を表示するテキスト
+                lag_text = ft.Text(
+                    f"ラグ次数: {self.lag_settings[feature]['lag']}次",
+                    size=14,
+                )
+
+                # ラグ次数のスライダー
+                lag_slider = ft.Slider(
+                    min=0,
+                    max=self.max_lag,
+                    divisions=self.max_lag,  # 整数メモリを設定
+                    value=self.lag_settings[feature]["lag"],
+                    label="{value}次",  # スライダーの値ラベル
+                    width=200,
+                    on_change=lambda e, f=feature, t=lag_text: self._handle_lag_change(
+                        e, f, t
+                    ),
+                )
+
+                # 変数ごとの設定行
                 feature_row = ft.Row(
                     [
-                        ft.Text(feature, size=14),
-                        ft.Slider(
-                            min=0,
-                            max=self.max_lag,
-                            value=self.lag_settings[feature]["lag"],
-                            on_change=lambda e, f=feature: self._handle_lag_change(
-                                e, f
-                            ),
-                            width=200,
-                        ),
-                        ft.Text(
-                            f"ラグ次数: {self.lag_settings[feature]['lag']}",
-                            size=14,
+                        ft.Text(feature, size=14, width=100),
+                        ft.Column(
+                            [
+                                ft.Row(
+                                    [lag_slider, lag_text],
+                                    alignment=ft.MainAxisAlignment.START,
+                                ),
+                            ],
+                            spacing=5,
                         ),
                     ],
                     alignment=ft.MainAxisAlignment.START,
@@ -325,19 +350,22 @@ class LagSelector(ft.Container):
         self.lag_settings = new_settings
         self._update_lag_ui()
 
-    def _handle_lag_change(self, e, feature: str):
+    def _handle_lag_change(self, e, feature: str, text_control: ft.Text):
         """ラグ次数が変更されたときの処理"""
         try:
             value = int(e.control.value)
             if 0 <= value <= self.max_lag:
                 self.lag_settings[feature]["lag"] = value
+                text_control.value = f"ラグ次数: {value}次"
             else:
-                e.control.value = "0"
+                e.control.value = 0
                 self.lag_settings[feature]["lag"] = 0
+                text_control.value = "ラグ次数: 0次"
         except ValueError:
-            e.control.value = "0"
+            e.control.value = 0
             self.lag_settings[feature]["lag"] = 0
-        self._update_lag_ui()
+            text_control.value = "ラグ次数: 0次"
+        self.page.update()
 
     def get_lag_settings(self) -> dict:
         """現在のラグ設定を返す"""
