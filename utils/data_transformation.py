@@ -31,8 +31,20 @@ def get_dataframe_for_pattern(
     pd.DataFrame
         変換・標準化されたデータフレーム
     """
+    print(
+        f"DEBUG: get_dataframe_for_pattern - 変換タイプ: {transformation_type}, 標準化: {is_standardized}"
+    )
+    print(f"DEBUG: 入力データフレームの形状: {df.shape}")
+
     # データフレームのコピーを作成
     transformed_df = df.copy()
+
+    # デバッグ情報：各カラムのデータ型を表示
+    print("DEBUG: カラムのデータ型:")
+    for col in transformed_df.columns:
+        print(f"DEBUG: {col}: {transformed_df[col].dtype}")
+        print(f"DEBUG: {col}の欠損値数: {transformed_df[col].isna().sum()}")
+        print(f"DEBUG: {col}の最初の5行: {transformed_df[col].head()}")
 
     # kijyunnengetuカラムを保持
     kijyunnengetu_col = None
@@ -42,38 +54,53 @@ def get_dataframe_for_pattern(
 
     # 数値型以外のカラムを除外
     numeric_cols = transformed_df.select_dtypes(include=np.number).columns.tolist()
+    print(f"DEBUG: 数値型カラム: {numeric_cols}")
     if not numeric_cols:
         print("DEBUG: 数値型のカラムがありません。")
         return pd.DataFrame()
     transformed_df = transformed_df[numeric_cols]
 
     # 変換を適用
-    if transformation_type == "log":
-        for col in transformed_df.columns:
-            transformed_df[col] = np.log1p(transformed_df[col])
-    elif transformation_type == "diff":
-        for col in transformed_df.columns:
-            transformed_df[col] = transformed_df[col].diff()
-        # 差分化後に欠損値を削除
-        transformed_df = transformed_df.dropna()
-    elif transformation_type == "log_diff":
-        for col in transformed_df.columns:
-            transformed_df[col] = np.log1p(transformed_df[col]).diff()
-        # 差分化後に欠損値を削除
-        transformed_df = transformed_df.dropna()
+    try:
+        if transformation_type == "log":
+            print("DEBUG: 対数変換を適用")
+            for col in transformed_df.columns:
+                transformed_df[col] = np.log1p(transformed_df[col])
+        elif transformation_type == "diff":
+            print("DEBUG: 差分化を適用")
+            for col in transformed_df.columns:
+                transformed_df[col] = transformed_df[col].diff()
+            # 差分化後に欠損値を削除
+            transformed_df = transformed_df.dropna()
+        elif transformation_type == "log_diff":
+            print("DEBUG: 対数変換後に差分化を適用")
+            for col in transformed_df.columns:
+                transformed_df[col] = np.log1p(transformed_df[col]).diff()
+            # 差分化後に欠損値を削除
+            transformed_df = transformed_df.dropna()
+    except Exception as e:
+        print(f"DEBUG: 変換適用中にエラー: {str(e)}")
+        raise
 
     # 標準化を適用
-    if is_standardized:
-        for col in transformed_df.columns:
-            mean = transformed_df[col].mean()
-            std = transformed_df[col].std()
-            if std != 0:  # 標準偏差が0でない場合のみ標準化
-                transformed_df[col] = (transformed_df[col] - mean) / std
+    try:
+        if is_standardized:
+            print("DEBUG: 標準化を適用")
+            for col in transformed_df.columns:
+                mean = transformed_df[col].mean()
+                std = transformed_df[col].std()
+                print(f"DEBUG: {col} - 平均: {mean}, 標準偏差: {std}")
+                if std != 0:  # 標準偏差が0でない場合のみ標準化
+                    transformed_df[col] = (transformed_df[col] - mean) / std
+    except Exception as e:
+        print(f"DEBUG: 標準化適用中にエラー: {str(e)}")
+        raise
 
     # kijyunnengetuカラムを戻す
     if kijyunnengetu_col is not None:
         transformed_df["kijyunnengetu"] = kijyunnengetu_col
 
+    print(f"DEBUG: 出力データフレームの形状: {transformed_df.shape}")
     return transformed_df
 
 
