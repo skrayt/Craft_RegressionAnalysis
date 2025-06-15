@@ -1,93 +1,130 @@
+"""
+データ変換用のユーティリティ関数モジュール。
+"""
+
 import pandas as pd
 import numpy as np
 from sklearn.preprocessing import StandardScaler
-from db.database import save_dataframe_to_sqlite_with_sanitization
+from db.database import (
+    save_dataframe_to_sqlite_with_sanitization,
+    read_dataframe_from_sqlite,
+)
+
+
+def get_dataframe_for_pattern(
+    df: pd.DataFrame, transformation_type: str, is_standardized: bool
+) -> pd.DataFrame:
+    """
+    指定された変換パターンと標準化に基づいてDataFrameを取得する
+
+    Parameters:
+    -----------
+    df : pd.DataFrame
+        元のデータフレーム
+    transformation_type : str
+        変換タイプ（"none", "log", "diff", "log_diff"）
+    is_standardized : bool
+        標準化するかどうか
+
+    Returns:
+    --------
+    pd.DataFrame
+        変換・標準化されたデータフレーム
+    """
+    # データフレームのコピーを作成
+    transformed_df = df.copy()
+
+    # kijyunnengetuカラムを保持
+    kijyunnengetu_col = None
+    if "kijyunnengetu" in transformed_df.columns:
+        kijyunnengetu_col = transformed_df["kijyunnengetu"]
+        transformed_df = transformed_df.drop(columns=["kijyunnengetu"])
+
+    # 数値型以外のカラムを除外
+    numeric_cols = transformed_df.select_dtypes(include=np.number).columns.tolist()
+    if not numeric_cols:
+        print("DEBUG: 数値型のカラムがありません。")
+        return pd.DataFrame()
+    transformed_df = transformed_df[numeric_cols]
+
+    # 変換を適用
+    if transformation_type == "log":
+        for col in transformed_df.columns:
+            transformed_df[col] = np.log1p(transformed_df[col])
+    elif transformation_type == "diff":
+        for col in transformed_df.columns:
+            transformed_df[col] = transformed_df[col].diff()
+        # 差分化後に欠損値を削除
+        transformed_df = transformed_df.dropna()
+    elif transformation_type == "log_diff":
+        for col in transformed_df.columns:
+            transformed_df[col] = np.log1p(transformed_df[col]).diff()
+        # 差分化後に欠損値を削除
+        transformed_df = transformed_df.dropna()
+
+    # 標準化を適用
+    if is_standardized:
+        for col in transformed_df.columns:
+            mean = transformed_df[col].mean()
+            std = transformed_df[col].std()
+            if std != 0:  # 標準偏差が0でない場合のみ標準化
+                transformed_df[col] = (transformed_df[col] - mean) / std
+
+    # kijyunnengetuカラムを戻す
+    if kijyunnengetu_col is not None:
+        transformed_df["kijyunnengetu"] = kijyunnengetu_col
+
+    return transformed_df
+
+
+def apply_transformations(
+    df: pd.DataFrame, transformations: list[str]
+) -> dict[str, pd.DataFrame]:
+    """
+    指定された変換を適用したデータフレームの辞書を返す
+
+    Parameters:
+    -----------
+    df : pd.DataFrame
+        元のデータフレーム
+    transformations : list[str]
+        適用する変換のリスト
+
+    Returns:
+    --------
+    dict[str, pd.DataFrame]
+        変換名をキー、変換後のデータフレームを値とする辞書
+    """
+    result = {}
+
+    for transformation in transformations:
+        if transformation == "対数変換":
+            transformed_df = get_dataframe_for_pattern(df, "log", False)
+            result["log_data"] = transformed_df
+        elif transformation == "差分化":
+            transformed_df = get_dataframe_for_pattern(df, "diff", False)
+            result["diff_data"] = transformed_df
+        elif transformation == "対数変換後に差分化":
+            transformed_df = get_dataframe_for_pattern(df, "log_diff", False)
+            result["log_diff_data"] = transformed_df
+
+    return result
 
 
 def standardize_data(df: pd.DataFrame, table_name_prefix: str = "") -> pd.DataFrame:
     """
-    データフレームを標準化し、データベースに保存する
+    データフレームを標準化する
 
-    Args:
-        df (pd.DataFrame): 標準化するデータフレーム
-        table_name_prefix (str): テーブル名のプレフィックス
-
-    Returns:
-        pd.DataFrame: 標準化されたデータフレーム
-    """
-    # kijyunnengetuカラムを保持
-    kijyunnengetu_col = None
-    if "kijyunnengetu" in df.columns:
-        kijyunnengetu_col = df["kijyunnengetu"]
-        df = df.drop(columns=["kijyunnengetu"])
-
-    # 標準化を適用
-    scaler = StandardScaler()
-    scaled_features = scaler.fit_transform(df)
-    scaled_df = pd.DataFrame(scaled_features, columns=df.columns)
-
-    # kijyunnengetuカラムを戻す
-    if kijyunnengetu_col is not None:
-        scaled_df["kijyunnengetu"] = kijyunnengetu_col
-
-    # データベースに保存
-    try:
-        save_dataframe_to_sqlite_with_sanitization(
-            scaled_df, table_name=f"{table_name_prefix}_standardized"
-        )
-        print(f"DEBUG: {table_name_prefix}の標準化データをデータベースに保存しました。")
-    except Exception as e:
-        print(f"DEBUG: {table_name_prefix}の標準化データの保存に失敗しました: {e}")
-
-    return scaled_df
-
-
-def apply_transformations(df: pd.DataFrame, transformations: list) -> dict:
-    """
-    データフレームに変換を適用する
-
-    Args:
-        df (pd.DataFrame): 変換を適用するデータフレーム
-        transformations (list): 適用する変換のリスト
+    Parameters:
+    -----------
+    df : pd.DataFrame
+        元のデータフレーム
+    table_name_prefix : str, optional
+        テーブル名のプレフィックス（デフォルトは空文字列）
 
     Returns:
-        dict: 変換後のデータフレームの辞書
+    --------
+    pd.DataFrame
+        標準化されたデータフレーム
     """
-    # kijyunnengetuカラムを保持
-    result_df = df.copy()
-    kijyunnengetu_col = None
-    if "kijyunnengetu" in df.columns:
-        kijyunnengetu_col = df["kijyunnengetu"]
-        result_df = result_df.drop(columns=["kijyunnengetu"])
-
-    # 各変換を個別に適用し、それぞれのデータフレームを保存
-    transformed_dfs = {}
-
-    # 対数変換
-    if "対数変換" in transformations:
-        log_df = result_df.copy()
-        for col in log_df.columns:
-            log_df[f"{col}_log"] = np.log1p(log_df[col])
-        if kijyunnengetu_col is not None:
-            log_df["kijyunnengetu"] = kijyunnengetu_col
-        transformed_dfs["log_data"] = log_df
-
-    # 差分化
-    if "差分化" in transformations:
-        diff_df = result_df.copy()
-        for col in diff_df.columns:
-            diff_df[f"{col}_diff"] = diff_df[col].diff()
-        if kijyunnengetu_col is not None:
-            diff_df["kijyunnengetu"] = kijyunnengetu_col
-        transformed_dfs["diff_data"] = diff_df
-
-    # 対数変換後に差分化
-    if "対数変換後に差分化" in transformations:
-        log_diff_df = result_df.copy()
-        for col in log_diff_df.columns:
-            log_diff_df[f"{col}_log_diff"] = np.log1p(log_diff_df[col]).diff()
-        if kijyunnengetu_col is not None:
-            log_diff_df["kijyunnengetu"] = kijyunnengetu_col
-        transformed_dfs["log_diff_data"] = log_diff_df
-
-    return transformed_dfs
+    return get_dataframe_for_pattern(df, "none", True)

@@ -15,6 +15,8 @@ from components.plot_utils import (
     # calculate_vif,
     create_vif_table,
 )
+from components.variable_selector import VariableSelector
+from utils.data_transformation import get_dataframe_for_pattern
 
 # 利用可能なデータ変換パターンを定義
 TRANSFORMATION_PATTERNS = {
@@ -41,253 +43,288 @@ TRANSFORMATION_SUFFIXES = {
 }
 
 
-def get_dataframe_for_pattern(pattern: str) -> pd.DataFrame:
-    """
-    指定された変換パターンに対応するデータフレームを取得する
-    """
-    if pattern == "none":
-        return read_dataframe_from_sqlite("merged_data")
-    elif pattern == "none_standardized":
-        return read_dataframe_from_sqlite("merged_standardized")
-    elif pattern == "log":
-        return read_dataframe_from_sqlite("log_data")
-    elif pattern == "log_standardized":
-        return read_dataframe_from_sqlite("log_data_standardized")
-    elif pattern == "diff":
-        return read_dataframe_from_sqlite("diff_data")
-    elif pattern == "diff_standardized":
-        return read_dataframe_from_sqlite("diff_data_standardized")
-    elif pattern == "log_diff":
-        return read_dataframe_from_sqlite("log_diff_data")
-    elif pattern == "log_diff_standardized":
-        return read_dataframe_from_sqlite("log_diff_data_standardized")
-    else:
-        raise ValueError(f"未知の変換パターン: {pattern}")
-
-
 def analysis_page(page: ft.Page) -> ft.Container:
     """
     Create the correlation and VIF analysis page with interactive controls.
     """
-    # 初期データとして変換なしのデータを使用
-    initial_df = get_dataframe_for_pattern("none")
-    all_columns = initial_df.columns.tolist()
-
-    # 目的変数の選択と変換パターン
-    target_selector = ft.Dropdown(
-        label="目的変数",
-        options=[ft.dropdown.Option(col) for col in all_columns],
-        on_change=lambda e: refresh_feature_options(),
-    )
-    target_pattern = ft.Dropdown(
-        label="目的変数の変換パターン",
-        options=[
-            ft.dropdown.Option(key, value)
-            for key, value in TRANSFORMATION_PATTERNS.items()
-        ],
-        value="none",
-        on_change=lambda e: refresh_feature_options(),
-    )
-
-    # 説明変数の選択と変換パターン
-    features_available = ft.Column()
-    features_selected = ft.Column()
-    feature_patterns = {}  # 各説明変数の変換パターンを保持
-
-    corr_heatmap_image = ft.Image()
-    vif_table = ft.DataTable(columns=[ft.DataColumn(ft.Text("VIF値"))], rows=[])
-
-    def refresh_feature_options():
-        selected = target_selector.value
-        features_available.controls.clear()
-        features_selected.controls.clear()
-        feature_patterns.clear()
-
-        for col in all_columns:
-            if col != selected:
-                # 説明変数の選択チェックボックス
-                checkbox = ft.Checkbox(label=col, value=False)
-                # 変換パターン選択ドロップダウン
-                pattern_dropdown = ft.Dropdown(
-                    label=f"{col}の変換パターン",
-                    options=[
-                        ft.dropdown.Option(key, value)
-                        for key, value in TRANSFORMATION_PATTERNS.items()
-                    ],
-                    value="none",
-                    disabled=True,  # 初期状態は無効
-                    width=200,  # ドロップダウンの幅を固定
-                )
-
-                # チェックボックスの状態変更時にドロップダウンの有効/無効を切り替え
-                def create_on_change_handler(cb, dd):
-                    def handler(e):
-                        dd.disabled = not cb.value
-                        page.update()
-
-                    return handler
-
-                checkbox.on_change = create_on_change_handler(
-                    checkbox, pattern_dropdown
-                )
-                feature_patterns[col] = pattern_dropdown
-
-                # チェックボックスとドロップダウンを横並びに配置（チェックボックスを左に）
-                features_available.controls.append(
-                    ft.Row(
-                        [
-                            checkbox,
-                            pattern_dropdown,
-                        ],
-                        alignment=ft.MainAxisAlignment.START,
-                        spacing=10,
-                    )
-                )
-        page.update()
-
-    def run_correlation(target_column):
-        if not target_column:
-            print(f"target_columnはnullです:")
-            return
-
-        # 目的変数のデータを取得
-        target_df = get_dataframe_for_pattern(target_pattern.value)
-        if target_column not in target_df.columns:
-            print(f"目的変数'{target_column}'がデータフレームに存在しません")
-            return
-        target_data = target_df[["kijyunnengetu", target_column]]
-        print(target_data)
-
-        # 選択された説明変数とその変換パターンを取得
-        selected_features = []
-        feature_dfs = []
-        feature_data = pd.DataFrame()
-
-        for control in features_available.controls:
-            if isinstance(control, ft.Row):
-                checkbox = control.controls[0]
-                pattern_dropdown = control.controls[1]
-                if checkbox.value:
-                    feature_name = checkbox.label
-                    pattern = (
-                        pattern_dropdown.value
-                    )  # 現在の説明変数の変換パターンを取得
-                    feature_suffix = TRANSFORMATION_SUFFIXES.get(pattern, "")
-                    feature_column = f"{feature_name}{feature_suffix}"
-
-                    feature_df = get_dataframe_for_pattern(pattern)
-                    print(f"feature_df:{feature_df.columns}")
-                    if feature_column not in feature_df.columns:
-                        print(
-                            f"説明変数'{feature_column}'がデータフレームに存在しません"
-                        )
-                        continue
-
-                    # 'kijyunnengetu'と'feature_column'のカラムをデータフレームへ
-                    df = feature_df[["kijyunnengetu", feature_column]]
-
-                    # 説明変数をfeature_dataに格納して、kijyunnengetuでinner結合
-                    if feature_data.shape[0] > 1:
-                        feature_data = pd.merge(
-                            feature_data, df, on="kijyunnengetu", how="inner"
-                        )
-                    else:
-                        feature_data = df
-                    selected_features.append(feature_column)
-                    print(feature_data.columns)
-
-        # 'kijyunnengetu'をキーにしてデータフレームを結合
-        combined_df = pd.merge(
-            target_data, feature_data, on="kijyunnengetu", how="inner"
-        )
-        print(f"combined_df:{pd.DataFrame(combined_df).columns}")
-
-        # kijyunnengetuを削除して分析用データフレームを作成
-        analyisis_df = combined_df.drop(columns="kijyunnengetu")
-
-        # 相関ヒートマップを作成
-        corr_heatmap_image.src_base64 = plot_corr_heatmap(
-            analyisis_df, target_column, selected_features
+    # 初期データの読み込み
+    initial_df = read_dataframe_from_sqlite("merged_data")
+    if initial_df is None or initial_df.empty:
+        return ft.Container(
+            content=ft.Text(
+                "データが読み込まれていません。データ取込み・参照タブでCSVをロードしてください。"
+            )
         )
 
-        # VIFクロステーブルを作成
-        vif_table.columns, vif_table.rows = create_vif_table(
-            analyisis_df, selected_features
-        )
-        print(f"combined_df:{combined_df}")
-        page.update()
+    # kijyunnengetu以外のカラムを取得
+    all_columns = [col for col in initial_df.columns if col != "kijyunnengetu"]
 
-    # ページタイトル
-    header_parts = ft.Row(
-        [
-            ft.Text("相関係数分析", size=20, weight=ft.FontWeight.BOLD),
-            ft.Divider(),
-        ]
-    )
-    # 変数の選択と結果表示ボタン
-    controller_parts = ft.Column(
-        [
-            ft.Text("目的変数の設定", size=16),
-            ft.Row(
-                [
-                    target_selector,
-                    target_pattern,
-                ],
-                alignment=ft.MainAxisAlignment.START,
-                spacing=10,
-            ),
-            ft.Divider(),
-            ft.Text("説明変数の設定", size=16),
-            ft.Text(
-                "※目的変数に選択した項目は説明変数から除外されます",
-                size=12,
-                color=ft.Colors.GREY_600,
-            ),
-            ft.Row(
-                [features_available],
-                scroll=ft.ScrollMode.AUTO,
-            ),
-            ft.ElevatedButton(
-                "相関係数/VIFを表示",
-                on_click=lambda e: run_correlation(
-                    f"{target_selector.value}{TRANSFORMATION_SUFFIXES.get(target_pattern.value,'')}"
-                ),
-                style=ft.ButtonStyle(
-                    color=ft.Colors.WHITE,
-                    bgcolor=ft.Colors.BLUE,
-                ),
-            ),
-        ],
-        expand=1,
-        scroll=ft.ScrollMode.AUTO,
-        alignment=ft.MainAxisAlignment.START,
-    )
-
-    result_parts = ft.Column(
-        [
-            ft.Text("相関ヒートマップ", size=16, weight=ft.FontWeight.BOLD),
-            corr_heatmap_image,
-            ft.Divider(),
-            ft.Text("VIF値", size=16, weight=ft.FontWeight.BOLD),
-            vif_table,
-        ],
-        expand=4,
-        spacing=20,
-        scroll=ft.ScrollMode.AUTO,
-        alignment=ft.MainAxisAlignment.START,
-    )
-
-    return ft.Container(
+    # 結果表示用のコンテナ
+    result_container = ft.Container(
         content=ft.Column(
             [
-                header_parts,
-                ft.Row(
-                    [ft.Column([controller_parts]), ft.Column([result_parts])],
-                    vertical_alignment=ft.CrossAxisAlignment.START,
+                ft.Text("分析結果", size=20, weight=ft.FontWeight.BOLD),
+                ft.Text(
+                    "変数を選択して「分析実行」ボタンを押してください。",
+                    color=ft.Colors.GREY_700,
                 ),
-            ]
+            ],
+            spacing=10,
         ),
-        expand=True,
         padding=20,
-        border=ft.border.all(1, ft.Colors.GREY_400),
+        border=ft.border.all(1, ft.Colors.GREY_300),
+        border_radius=5,
+        expand=True,
+    )
+
+    # 分析実行ボタン
+    analyze_button = ft.ElevatedButton(
+        "分析実行",
+        icon=ft.Icons.PLAY_ARROW_ROUNDED,
+        on_click=lambda e: run_analysis(),
+        style=ft.ButtonStyle(
+            color=ft.Colors.WHITE,
+            bgcolor=ft.Colors.BLUE,
+            padding=10,
+        ),
+    )
+
+    def validate_data(
+        df: pd.DataFrame, column: str, transformation: str
+    ) -> tuple[bool, str]:
+        """
+        データの妥当性をチェックする
+
+        Returns:
+            tuple[bool, str]: (データが有効かどうか, エラーメッセージ)
+        """
+        if df[column].isnull().any():
+            return False, f"列 '{column}' に欠損値が含まれています。"
+
+        if transformation in ["log", "log_diff"]:
+            if (df[column] <= 0).any():
+                return (
+                    False,
+                    f"列 '{column}' に対数変換できない値（0以下）が含まれています。",
+                )
+
+        if transformation in ["diff", "log_diff"]:
+            if df[column].isnull().any():
+                return False, f"列 '{column}' に差分化できない欠損値が含まれています。"
+
+        return True, ""
+
+    def run_analysis():
+        """分析を実行し、結果を表示する"""
+        target, features = variable_selector.get_selected_variables()
+        if not target or not features:
+            # エラーメッセージを表示
+            result_container.content = ft.Column(
+                [
+                    ft.Text("分析結果", size=20, weight=ft.FontWeight.BOLD),
+                    ft.Text(
+                        "目的変数と説明変数を選択してください。",
+                        color=ft.Colors.RED_700,
+                    ),
+                ],
+                spacing=10,
+            )
+            page.update()
+            return
+
+        # 変数の設定を取得
+        settings = variable_selector.get_variable_settings()
+        print(f"DEBUG: 変数の設定: {settings}")  # デバッグ用
+
+        try:
+            # 目的変数のデータを取得
+            target_df = get_dataframe_for_pattern(
+                initial_df,
+                settings[target]["transformation"],
+                settings[target]["standardization"],
+            )
+
+            # 目的変数のデータを検証
+            is_valid, error_msg = validate_data(
+                target_df, target, settings[target]["transformation"]
+            )
+            if not is_valid:
+                raise ValueError(f"目的変数 {target} のデータが無効です: {error_msg}")
+
+            print(f"DEBUG: 目的変数のデータ形状: {target_df.shape}")  # デバッグ用
+
+            # 説明変数のデータを取得
+            feature_dfs = []
+            for feature in features:
+                feature_df = get_dataframe_for_pattern(
+                    initial_df,
+                    settings[feature]["transformation"],
+                    settings[feature]["standardization"],
+                )
+
+                # 説明変数のデータを検証
+                is_valid, error_msg = validate_data(
+                    feature_df, feature, settings[feature]["transformation"]
+                )
+                if not is_valid:
+                    raise ValueError(
+                        f"説明変数 {feature} のデータが無効です: {error_msg}"
+                    )
+
+                print(
+                    f"DEBUG: 説明変数 {feature} のデータ形状: {feature_df.shape}"
+                )  # デバッグ用
+                feature_dfs.append(feature_df[[feature]])
+
+            # データを結合
+            X = pd.concat(feature_dfs, axis=1)
+            y = target_df[[target]]
+
+            # 分析用データフレームを作成
+            analysis_df = pd.concat([y, X], axis=1)
+
+            # 最終的なデータフレームの検証
+            if analysis_df.isnull().any().any():
+                raise ValueError("分析用データフレームに欠損値が含まれています。")
+            if np.isinf(analysis_df.values).any():
+                raise ValueError("分析用データフレームに無限大の値が含まれています。")
+
+            print(
+                f"DEBUG: 分析用データフレームの形状: {analysis_df.shape}"
+            )  # デバッグ用
+            print(
+                f"DEBUG: 分析用データフレームのカラム: {analysis_df.columns.tolist()}"
+            )  # デバッグ用
+
+            # 相関ヒートマップを作成
+            corr_heatmap = ft.Image(
+                src_base64=plot_corr_heatmap(analysis_df, target, features),
+                width=600,
+                height=400,
+            )
+
+            # VIFクロステーブルを作成
+            vif_headers, vif_rows = create_vif_table(analysis_df, features)
+            vif_table = ft.DataTable(
+                columns=vif_headers,
+                rows=vif_rows,
+                border=ft.border.all(1, ft.Colors.GREY_300),
+                border_radius=5,
+            )
+
+            # 変換パターンの情報を表示
+            transformation_info = ft.Column(
+                [
+                    ft.Text("変換パターン", size=16, weight=ft.FontWeight.BOLD),
+                    ft.Text(
+                        f"目的変数 ({target}): {settings[target]['transformation']}"
+                        + (" (標準化済)" if settings[target]["standardization"] else "")
+                    ),
+                ]
+            )
+            for feature in features:
+                transformation_info.controls.append(
+                    ft.Text(
+                        f"説明変数 ({feature}): {settings[feature]['transformation']}"
+                        + (
+                            " (標準化済)"
+                            if settings[feature]["standardization"]
+                            else ""
+                        )
+                    )
+                )
+
+            # 結果を表示
+            result_container.content = ft.Column(
+                [
+                    ft.Text("分析結果", size=20, weight=ft.FontWeight.BOLD),
+                    ft.Text(f"目的変数: {target}", size=16),
+                    ft.Text(f"説明変数: {', '.join(features)}", size=16),
+                    ft.Divider(),
+                    transformation_info,
+                    ft.Divider(),
+                    ft.Text("相関行列", size=16, weight=ft.FontWeight.BOLD),
+                    corr_heatmap,
+                    ft.Divider(),
+                    ft.Text("VIF値", size=16, weight=ft.FontWeight.BOLD),
+                    vif_table,
+                ],
+                spacing=10,
+                scroll=ft.ScrollMode.AUTO,
+            )
+
+        except ValueError as e:
+            print(f"DEBUG: データ検証エラー: {str(e)}")  # デバッグ用
+            result_container.content = ft.Column(
+                [
+                    ft.Text("分析結果", size=20, weight=ft.FontWeight.BOLD),
+                    ft.Text(
+                        f"データエラー: {str(e)}",
+                        color=ft.Colors.RED_700,
+                    ),
+                ],
+                spacing=10,
+            )
+        except Exception as e:
+            print(f"DEBUG: 分析実行中にエラーが発生: {str(e)}")  # デバッグ用
+            result_container.content = ft.Column(
+                [
+                    ft.Text("分析結果", size=20, weight=ft.FontWeight.BOLD),
+                    ft.Text(
+                        f"分析実行中にエラーが発生しました: {str(e)}",
+                        color=ft.Colors.RED_700,
+                    ),
+                ],
+                spacing=10,
+            )
+
+        page.update()
+
+    def on_variable_change():
+        """変数選択が変更された時の処理"""
+        # 変数が選択されていない場合は何もしない
+        target, features = variable_selector.get_selected_variables()
+        if not target or not features:
+            return
+
+        # 分析を実行
+        run_analysis()
+
+    # 変数選択コンポーネントの初期化
+    variable_selector = VariableSelector(
+        page=page,
+        all_columns=all_columns,
+        on_variable_change=None,  # 変数選択時の自動更新を無効化
+    )
+
+    # UIコンポーネントを取得
+    target_row, feature_container = variable_selector.get_ui_components()
+
+    # 左側のパネル（変数選択）
+    left_panel = ft.Container(
+        content=ft.Column(
+            [
+                ft.Text("相関分析・VIF分析", size=20, weight=ft.FontWeight.BOLD),
+                target_row,
+                ft.Text("説明変数を選択：", size=16),
+                feature_container,
+                ft.Container(
+                    content=analyze_button,
+                    alignment=ft.alignment.center,
+                    padding=10,
+                ),
+            ],
+            spacing=10,
+        ),
+        width=550,
+        padding=10,
+        border=ft.border.all(1, ft.Colors.GREY_300),
+        border_radius=5,
+    )
+
+    return ft.Row(
+        [left_panel, result_container],
+        expand=True,
+        alignment=ft.MainAxisAlignment.START,
+        vertical_alignment=ft.CrossAxisAlignment.START,
     )
