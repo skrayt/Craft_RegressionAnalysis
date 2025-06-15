@@ -67,7 +67,8 @@ def dynamic_regression_calc(
     features: list[str],
     X: pd.DataFrame,
     y: pd.Series,
-    lag_settings: dict[str, int],
+    lag_settings: dict,
+    include_lag: bool = True,  # ラグ使用の有無を追加
 ) -> tuple:
     """
     ダイナミック回帰分析を実行し、モデルと各種統計量を返す
@@ -82,31 +83,34 @@ def dynamic_regression_calc(
         説明変数のデータフレーム
     y : pd.Series
         目的変数のデータ
-    lag_settings : dict[str, int]
+    lag_settings : dict
         各説明変数のラグ次数設定
+    include_lag : bool
+        ラグ変数を使用するかどうか
 
     Returns:
     --------
     tuple
         (モデル, 平均交差検証MSE, モデルMSE, VIF値)
     """
-    # ラグ変数の作成
-    X_lagged = create_lagged_features(X, features, lag_settings)
-
-    # 欠損値の処理
-    X_lagged = X_lagged.dropna()
-    y_aligned = y[X_lagged.index]
+    if include_lag:
+        # ラグ変数を作成
+        X_with_lags = create_lagged_features(X, features, lag_settings)
+    else:
+        # ラグを使用しない場合、元のデータをそのまま使用
+        X_with_lags = X.copy()
 
     # 定数項を追加
-    X_with_const = sm.add_constant(X_lagged)
+    X_with_const = sm.add_constant(X_with_lags)
 
     # Statsmodelsで線形回帰モデルを構築
-    model = sm.OLS(y_aligned, X_with_const).fit()
+    model = sm.OLS(y, X_with_const).fit()
 
     # Scikit-learnで交差検証を実施
     lr = LinearRegression()
+    tscv = TimeSeriesSplit(n_splits=5)
     cross_val_scores = cross_val_score(
-        lr, X_lagged, y_aligned, cv=5, scoring="neg_mean_squared_error"
+        lr, X_with_lags, y, cv=tscv, scoring="neg_mean_squared_error"
     )
 
     # 平均二乗誤差（MSE）の平均値
@@ -116,11 +120,11 @@ def dynamic_regression_calc(
     y_pred = model.predict(X_with_const)
 
     # 平均二乗誤差（MSE）を計算
-    mse = mean_squared_error(y_aligned, y_pred)
+    mse = mean_squared_error(y, y_pred)
 
     # VIF値を計算
     vifData = pd.DataFrame()
-    vifData["Feature"] = ["const"] + X_lagged.columns.tolist()
+    vifData["Feature"] = ["const"] + X_with_lags.columns.tolist()
     vifData["VIF"] = [
         variance_inflation_factor(X_with_const.values, i)
         for i in range(X_with_const.shape[1])
@@ -169,350 +173,375 @@ def plot_predictions(y_true: np.ndarray, y_pred: np.ndarray, dates: pd.Series) -
     return base64.b64encode(buf.getvalue()).decode("utf-8")
 
 
-class LagSelector(ft.Control):  # UserControlからft.Controlに変更
+class LagSelector(ft.Container):
     def __init__(self, page: ft.Page):
         super().__init__()
         self.page = page
-        self.lag_settings = {}
-        self.optimal_lags = {}
-        self.lag_images = {}
-        self.criterion = "aic"  # デフォルトの選択基準
-        self.lag_inputs = {}  # ラグ次数入力フィールドを保持
+        self.lag_settings = {}  # 各変数のラグ設定を保持
+        self.include_lag = False  # デフォルトはFalse
+        self.max_lag = 12  # 最大ラグ次数のデフォルト値
+        self.optimization_method = "aic"  # デフォルトの最適化方法
 
-        # UIコンポーネントの初期化
-        self.criterion_dropdown = ft.Dropdown(
-            label="ラグ次数選択基準",
+        # ラグ設定のUIコンポーネント
+        self.include_lag_switch = ft.Switch(
+            label="ラグ変数を含める", value=False, on_change=self._on_include_lag_change
+        )
+
+        # 最適化方法の選択
+        self.optimization_dropdown = ft.Dropdown(
+            label="最適化方法",
             options=[
-                ft.dropdown.Option("aic", "AIC（赤池情報量基準）"),
-                ft.dropdown.Option("bic", "BIC（ベイズ情報量基準）"),
+                ft.dropdown.Option("aic", "AIC"),
+                ft.dropdown.Option("bic", "BIC"),
                 ft.dropdown.Option("cv", "交差検証"),
             ],
             value="aic",
             width=200,
-            on_change=self.on_criterion_change,
+            on_change=self._on_optimization_change,
         )
 
+        # 最適化実行ボタン
+        self.optimize_button = ft.ElevatedButton(
+            text="ラグ次数を最適化", on_click=self._optimize_lag_order, width=200
+        )
+
+        # 最大ラグ次数の設定
         self.max_lag_slider = ft.Slider(
             min=1,
-            max=20,
-            divisions=19,
+            max=24,
+            value=12,
             label="最大ラグ次数: {value}",
-            value=10,
-            width=300,
+            width=200,
+            on_change=self._on_max_lag_change,
         )
 
-        self.optimize_button = ft.ElevatedButton(
-            text="最適ラグ次数を計算",
-            on_click=self.optimize_lags,
-            style=ft.ButtonStyle(
-                color=ft.Colors.WHITE,
-                bgcolor=ft.Colors.BLUE,
-            ),
+        # ラグ設定の詳細セクション
+        self.lag_settings_column = ft.Column(
+            controls=[
+                ft.Row([self.optimization_dropdown, self.optimize_button]),
+                ft.Text("最大ラグ次数の設定："),
+                self.max_lag_slider,
+                ft.Divider(),
+                ft.Text("各変数のラグ次数設定：", size=16),
+            ],
+            visible=False,  # デフォルトは非表示
         )
 
-        self.lag_controls = ft.Column(spacing=10)
-        self.lag_plots = ft.Column(spacing=20)
+        # メインのコンテンツ
+        self.content = ft.Column([self.include_lag_switch, self.lag_settings_column])
 
-        # メインのコンテナを作成
-        self.content = ft.Column(
-            [
-                ft.Text("ラグ設定", size=16, weight=ft.FontWeight.BOLD),
-                ft.Row(
+    def _on_include_lag_change(self, e):
+        """ラグ変数を含めるトグルの変更時の処理"""
+        self.include_lag = e.control.value
+        self.lag_settings_column.visible = self.include_lag
+        self.page.update()
+
+    def _on_optimization_change(self, e):
+        """最適化方法の変更時の処理"""
+        self.optimization_method = e.control.value
+
+    def _on_max_lag_change(self, e):
+        """最大ラグ次数の変更時の処理"""
+        self.max_lag = int(e.control.value)
+        self._update_lag_ui()
+
+    def _optimize_lag_order(self, e):
+        """ラグ次数の最適化を実行"""
+        if not self.lag_settings:
+            return
+
+        for feature in self.lag_settings.keys():
+            # 最適化方法に基づいてラグ次数を計算
+            if self.optimization_method == "aic":
+                optimal_lag = self._calculate_optimal_lag_aic(feature)
+            elif self.optimization_method == "bic":
+                optimal_lag = self._calculate_optimal_lag_bic(feature)
+            else:  # cv
+                optimal_lag = self._calculate_optimal_lag_cv(feature)
+
+            self.lag_settings[feature]["lag"] = optimal_lag
+
+        self._update_lag_ui()
+        self.page.update()
+
+    def _calculate_optimal_lag_aic(self, feature):
+        """AICに基づく最適なラグ次数を計算"""
+        # TODO: AICに基づく最適化の実装
+        return min(5, self.max_lag)  # 仮の実装
+
+    def _calculate_optimal_lag_bic(self, feature):
+        """BICに基づく最適なラグ次数を計算"""
+        # TODO: BICに基づく最適化の実装
+        return min(4, self.max_lag)  # 仮の実装
+
+    def _calculate_optimal_lag_cv(self, feature):
+        """交差検証に基づく最適なラグ次数を計算"""
+        # TODO: 交差検証に基づく最適化の実装
+        return min(6, self.max_lag)  # 仮の実装
+
+    def _update_lag_ui(self):
+        """ラグ設定のUIを更新"""
+        # ラグ設定の詳細部分をクリア
+        while len(self.lag_settings_column.controls) > 4:  # 基本要素を除く
+            self.lag_settings_column.controls.pop()
+
+        # ラグ設定が有効な場合のみ詳細を表示
+        if self.include_lag and self.lag_settings:
+            # 各変数のラグ設定を表示
+            for feature in self.lag_settings.keys():
+                feature_row = ft.Row(
                     [
-                        self.criterion_dropdown,
-                        self.max_lag_slider,
-                        self.optimize_button,
+                        ft.Text(feature, size=14),
+                        ft.Slider(
+                            min=0,
+                            max=self.max_lag,
+                            value=self.lag_settings[feature]["lag"],
+                            on_change=lambda e, f=feature: self._handle_lag_change(
+                                e, f
+                            ),
+                            width=200,
+                        ),
+                        ft.Text(
+                            f"ラグ次数: {self.lag_settings[feature]['lag']}",
+                            size=14,
+                        ),
                     ],
                     alignment=ft.MainAxisAlignment.START,
-                ),
-                self.lag_controls,
-                ft.Divider(),
-                ft.Text("ラグ選択結果", size=16, weight=ft.FontWeight.BOLD),
-                self.lag_plots,
-            ],
-            spacing=10,
-        )
+                )
+                self.lag_settings_column.controls.append(feature_row)
 
-    def build(self):
-        """UIコンポーネントを構築して返す"""
-        return self.content
+        self.page.update()
 
-    def update_features(self, features: list[str]):
-        """説明変数が変更されたときに呼び出される"""
-        self.lag_settings = {feature: 0 for feature in features}
-        self.optimal_lags = {}
-        self.lag_images = {}
-        self.lag_controls.controls.clear()
-        self.lag_plots.controls.clear()
-        self.lag_inputs.clear()
-
-        # 各説明変数に対してラグ設定用のUIを作成
+    def update_lag_settings(self, features: list[str]):
+        """ラグ設定を更新"""
+        print(f"DEBUG: ラグ設定を更新中... 選択された特徴量: {features}")
+        new_settings = {}
         for feature in features:
-            # ラグ次数入力フィールド
-            lag_input = ft.TextField(
-                label=f"{feature}のラグ次数",
-                value="0",
-                width=150,
-                keyboard_type=ft.KeyboardType.NUMBER,
-                on_change=lambda e, f=feature: self.on_lag_input_change(
-                    f, e.control.value
-                ),
-            )
-            self.lag_inputs[feature] = lag_input
+            # 既存の設定がある場合はそれを保持、ない場合は新しい設定を作成
+            if feature in self.lag_settings:
+                new_settings[feature] = self.lag_settings[feature]
+            else:
+                new_settings[feature] = {"lag": 0}  # 初期値として辞書を設定
+        self.lag_settings = new_settings
+        self._update_lag_ui()
 
-            # 推奨ラグ次数表示用のテキスト
-            recommended_text = ft.Text(
-                f"推奨ラグ次数: 未計算",
-                size=12,
-                color=ft.Colors.GREY_700,
-                italic=True,
-            )
-
-            # ラグ設定用の行
-            row = ft.Row(
-                [
-                    lag_input,
-                    recommended_text,
-                ],
-                alignment=ft.MainAxisAlignment.START,
-                spacing=10,
-            )
-
-            # 行をコントロールに追加
-            self.lag_controls.controls.append(row)
-
-        self.update()
-
-    def on_lag_input_change(self, feature: str, value: str):
-        """ラグ次数の入力値が変更されたときに呼び出される"""
+    def _handle_lag_change(self, e, feature: str):
+        """ラグ次数が変更されたときの処理"""
         try:
-            lag = int(value)
-            if lag < 0:
-                lag = 0
-            elif lag > int(self.max_lag_slider.value):
-                lag = int(self.max_lag_slider.value)
-            self.lag_settings[feature] = lag
-            self.lag_inputs[feature].value = str(lag)
+            value = int(e.control.value)
+            if 0 <= value <= self.max_lag:
+                self.lag_settings[feature]["lag"] = value
+            else:
+                e.control.value = "0"
+                self.lag_settings[feature]["lag"] = 0
         except ValueError:
-            self.lag_inputs[feature].value = "0"
-            self.lag_settings[feature] = 0
-        self.update()
+            e.control.value = "0"
+            self.lag_settings[feature]["lag"] = 0
+        self._update_lag_ui()
 
-    def optimize_lags(self, e):
-        """選択された説明変数に対して最適なラグ次数を計算"""
-        if (
-            not hasattr(self.page, "app_data")
-            or not self.page.app_data.merged_df is not None
-        ):
-            self.page.show_snack_bar("データが読み込まれていません")
-            return
-
-        df = self.page.app_data.merged_df
-        features = list(self.lag_settings.keys())
-
-        if not features:
-            self.page.show_snack_bar("説明変数を選択してください")
-            return
-
-        self.lag_plots.controls.clear()
-        self.optimal_lags.clear()
-        self.lag_images.clear()
-
-        for feature in features:
-            data = df[feature]
-            max_lag = int(self.max_lag_slider.value)
-
-            # 最適なラグ次数を計算
-            optimal_lag, optimal_score = find_optimal_lag_order(
-                data, max_lag=max_lag, criterion=self.criterion
-            )
-
-            self.optimal_lags[feature] = optimal_lag
-
-            # 推奨ラグ次数を表示
-            recommended_text = self.lag_controls.controls[
-                features.index(feature)
-            ].controls[1]
-            recommended_text.value = (
-                f"推奨ラグ次数: {optimal_lag} ({self.criterion.upper()})"
-            )
-            recommended_text.color = ft.Colors.BLUE_700
-
-            # ラグ選択の結果をプロット
-            lags = list(range(1, max_lag + 1))
-            scores = []
-            for lag in lags:
-                _, score = find_optimal_lag_order(
-                    data, max_lag=lag, min_lag=lag, criterion=self.criterion
-                )
-                scores.append(score)
-
-            plot_image = plot_lag_selection_results(
-                feature, lags, scores, self.criterion
-            )
-
-            self.lag_images[feature] = plot_image
-            self.lag_plots.controls.append(
-                ft.Column(
-                    [
-                        ft.Text(
-                            f"{feature}のラグ選択結果",
-                            size=14,
-                            weight=ft.FontWeight.BOLD,
-                        ),
-                        ft.Text(
-                            f"推奨ラグ次数: {optimal_lag} ({self.criterion.upper()})",
-                            size=12,
-                            color=ft.Colors.BLUE_700,
-                        ),
-                        ft.Image(
-                            src_base64=plot_image,
-                            width=600,
-                            height=300,
-                        ),
-                    ],
-                    spacing=5,
-                )
-            )
-
-        self.update()
-        self.page.update()
-
-    def get_ui_components(self):
-        """UIコンポーネントを取得"""
-        return self
-
-    def get_lag_settings(self):
-        """現在のラグ設定を取得"""
+    def get_lag_settings(self) -> dict:
+        """現在のラグ設定を返す"""
         return self.lag_settings.copy()
-
-    def on_criterion_change(self, e):
-        """ラグ次数選択基準が変更されたときの処理"""
-        self.criterion = e.control.value
-        # 最適ラグが計算済みの場合、新しい基準で再計算
-        if self.optimal_lags:
-            self.optimize_lags(None)
-        self.page.update()
 
 
 def find_optimal_lag_order(
-    data: pd.Series, max_lag: int = 10, min_lag: int = 1, criterion: str = "aic"
-) -> tuple[int, float]:
+    data: pd.Series, max_lag: int, criterion: str = "aic", min_lag: int = 1
+) -> int:
     """
-    最適なラグ次数を決定する関数
+    最適なラグ次数を計算する
 
     Parameters:
     -----------
     data : pd.Series
-        分析対象の時系列データ
+        時系列データ
     max_lag : int
         最大ラグ次数
+    criterion : str
+        選択基準 ("aic", "bic", "cv")
     min_lag : int
         最小ラグ次数
-    criterion : str
-        モデル選択基準 ("aic", "bic", "cv")
 
     Returns:
     --------
-    tuple[int, float]
-        (最適なラグ次数, 選択基準の値)
+    int
+        最適なラグ次数
     """
+    print(f"DEBUG: find_optimal_lag_orderが呼び出されました")
+    print(f"DEBUG: データの形状: {data.shape}")
+    print(f"DEBUG: 選択基準: {criterion}")
+
     if criterion == "cv":
-        # 時系列交差検証による評価
+        # 交差検証による選択
+        print("DEBUG: 交差検証による選択を実行")
         tscv = TimeSeriesSplit(n_splits=5)
-        scores = []
+        best_score = float("inf")
+        best_lag = min_lag
 
         for lag in range(min_lag, max_lag + 1):
-            lagged_data = pd.concat([data.shift(i) for i in range(1, lag + 1)], axis=1)
-            lagged_data.columns = [f"lag_{i}" for i in range(1, lag + 1)]
-            lagged_data = lagged_data.dropna()
+            try:
+                # ラグ付きデータの作成
+                lagged_data = pd.DataFrame(
+                    {"y": data[lag:], "x": data[:-lag] if lag > 0 else data}
+                ).dropna()
 
-            if len(lagged_data) < 10:  # データが少なすぎる場合はスキップ
+                if len(lagged_data) < 10:  # データが少なすぎる場合はスキップ
+                    continue
+
+                X = lagged_data[["x"]]
+                y = lagged_data["y"]
+
+                # 交差検証
+                model = LinearRegression()
+                scores = cross_val_score(
+                    model, X, y, cv=tscv, scoring="neg_mean_squared_error"
+                )
+                score = -scores.mean()
+
+                print(f"DEBUG: ラグ次数 {lag} のスコア: {score}")
+
+                if score < best_score:
+                    best_score = score
+                    best_lag = lag
+
+            except Exception as e:
+                print(f"DEBUG: ラグ次数 {lag} の計算中にエラー: {str(e)}")
                 continue
 
-            cv_scores = []
-            for train_idx, test_idx in tscv.split(lagged_data):
-                X_train = lagged_data.iloc[train_idx]
-                y_train = data.iloc[train_idx + lag]
-                X_test = lagged_data.iloc[test_idx]
-                y_test = data.iloc[test_idx + lag]
-
-                model = sm.OLS(y_train, sm.add_constant(X_train)).fit()
-                y_pred = model.predict(sm.add_constant(X_test))
-                mse = mean_squared_error(y_test, y_pred)
-                cv_scores.append(mse)
-
-            scores.append((lag, np.mean(cv_scores)))
-
-        optimal_lag = min(scores, key=lambda x: x[1])[0]
-        optimal_score = min(scores, key=lambda x: x[1])[1]
+        print(f"DEBUG: 最適なラグ次数: {best_lag} (スコア: {best_score})")
+        return best_lag
 
     else:
-        # AIC/BICによる評価
-        scores = []
-        for lag in range(min_lag, max_lag + 1):
-            lagged_data = pd.concat([data.shift(i) for i in range(1, lag + 1)], axis=1)
-            lagged_data.columns = [f"lag_{i}" for i in range(1, lag + 1)]
-            lagged_data = lagged_data.dropna()
+        # AIC/BICによる選択
+        print("DEBUG: AIC/BICによる選択を実行")
+        best_score = float("inf")
+        best_lag = min_lag
 
-            if len(lagged_data) < 10:
+        for lag in range(min_lag, max_lag + 1):
+            try:
+                # ラグ付きデータの作成
+                lagged_data = pd.DataFrame(
+                    {"y": data[lag:], "x": data[:-lag] if lag > 0 else data}
+                ).dropna()
+
+                if len(lagged_data) < 10:  # データが少なすぎる場合はスキップ
+                    continue
+
+                X = sm.add_constant(lagged_data[["x"]])
+                y = lagged_data["y"]
+
+                # モデルの構築
+                model = sm.OLS(y, X).fit()
+
+                # スコアの計算
+                if criterion == "aic":
+                    score = model.aic
+                else:  # bic
+                    score = model.bic
+
+                print(f"DEBUG: ラグ次数 {lag} のスコア: {score}")
+
+                if score < best_score:
+                    best_score = score
+                    best_lag = lag
+
+            except Exception as e:
+                print(f"DEBUG: ラグ次数 {lag} の計算中にエラー: {str(e)}")
                 continue
 
-            model = sm.OLS(data.iloc[lag:], sm.add_constant(lagged_data)).fit()
-            score = model.aic if criterion == "aic" else model.bic
-            scores.append((lag, score))
-
-        optimal_lag = min(scores, key=lambda x: x[1])[0]
-        optimal_score = min(scores, key=lambda x: x[1])[1]
-
-    return optimal_lag, optimal_score
+        print(f"DEBUG: 最適なラグ次数: {best_lag} (スコア: {best_score})")
+        return best_lag
 
 
 def plot_lag_selection_results(
-    feature: str, lags: list[int], scores: list[float], criterion: str
+    data: pd.Series, max_lag: int, criterion: str = "aic", min_lag: int = 1
 ) -> str:
     """
-    ラグ選択の結果をプロットする関数
+    ラグ選択の結果をプロットする
 
     Parameters:
     -----------
-    feature : str
-        説明変数名
-    lags : list[int]
-        ラグ次数のリスト
-    scores : list[float]
-        各ラグ次数に対応するスコアのリスト
+    data : pd.Series
+        時系列データ
+    max_lag : int
+        最大ラグ次数
     criterion : str
-        使用した選択基準
+        選択基準 ("aic", "bic", "cv")
+    min_lag : int
+        最小ラグ次数
 
     Returns:
     --------
     str
         base64エンコードされたプロット画像
     """
-    plt.figure(figsize=(8, 4))
-    plt.plot(lags, scores, "bo-")
+    print(f"DEBUG: plot_lag_selection_resultsが呼び出されました")
+
+    lags = list(range(min_lag, max_lag + 1))
+    scores = []
+
+    for lag in lags:
+        try:
+            # ラグ付きデータの作成
+            lagged_data = pd.DataFrame(
+                {"y": data[lag:], "x": data[:-lag] if lag > 0 else data}
+            ).dropna()
+
+            if len(lagged_data) < 10:
+                scores.append(np.nan)
+                continue
+
+            X = sm.add_constant(lagged_data[["x"]])
+            y = lagged_data["y"]
+
+            if criterion == "cv":
+                # 交差検証
+                model = LinearRegression()
+                tscv = TimeSeriesSplit(n_splits=5)
+                cv_scores = cross_val_score(
+                    model, X, y, cv=tscv, scoring="neg_mean_squared_error"
+                )
+                score = -cv_scores.mean()
+            else:
+                # AIC/BIC
+                model = sm.OLS(y, X).fit()
+                score = model.aic if criterion == "aic" else model.bic
+
+            scores.append(score)
+            print(f"DEBUG: ラグ次数 {lag} のスコア: {score}")
+
+        except Exception as e:
+            print(f"DEBUG: ラグ次数 {lag} のプロット作成中にエラー: {str(e)}")
+            scores.append(np.nan)
+
+    # プロットの作成
+    plt.figure(figsize=(10, 6))
+    plt.plot(lags, scores, "bo-", label=f"{criterion.upper()}スコア")
     plt.xlabel("ラグ次数")
-    plt.ylabel(f"{criterion.upper()}値")
-    plt.title(f"{feature}の最適ラグ次数選択 ({criterion.upper()})")
+    plt.ylabel(f"{criterion.upper()}スコア")
+    plt.title(f"ラグ次数選択結果 ({criterion.upper()})")
     plt.grid(True)
+    plt.legend()
 
     # 最適なラグ次数を強調
-    optimal_lag = lags[np.argmin(scores)]
-    plt.axvline(
-        x=optimal_lag, color="r", linestyle="--", label=f"最適ラグ次数: {optimal_lag}"
+    best_lag = lags[np.nanargmin(scores)]
+    best_score = np.nanmin(scores)
+    plt.plot(
+        best_lag, best_score, "ro", markersize=10, label=f"最適ラグ次数: {best_lag}"
     )
     plt.legend()
 
+    # プロットを画像に変換
     buf = io.BytesIO()
     plt.savefig(buf, format="png", bbox_inches="tight")
     plt.close()
+
+    print("DEBUG: プロットの作成が完了しました")
     return base64.b64encode(buf.getvalue()).decode("utf-8")
 
 
 def dynamic_regression_page(page: ft.Page) -> ft.Container:
     """
-    ダイナミック回帰分析ページのUIを構築
+    ダイナミック回帰分析ページを構築する関数
     """
     # 初期データの読み込み
     initial_df = read_dataframe_from_sqlite("merged_data")
@@ -526,232 +555,283 @@ def dynamic_regression_page(page: ft.Page) -> ft.Container:
     # kijyunnengetu以外のカラムを取得
     all_columns = [col for col in initial_df.columns if col != "kijyunnengetu"]
 
-    # プロット画像用の変数
-    residual_image = ft.Image()
-    prediction_image = ft.Image()
-
     # 結果表示用のコンテナ
-    result_col = ft.Column(
-        scroll=ft.ScrollMode.AUTO,
-        expand=True,
+    result_column = ft.Column(
+        scroll=ft.ScrollMode.ALWAYS,
+        expand=1,
         spacing=10,
-        height=page.height - 100,
     )
-
-    # 結果表示用のスクロール可能なコンテナ
-    result_scroll_container = ft.Container(
-        content=ft.Row(
-            [result_col],
-            scroll=ft.ScrollMode.AUTO,
-            wrap=False,  # 横スクロールを有効にするために必要
-        ),
-        expand=True,
-        border=ft.border.all(1, ft.Colors.GREY_400),
-        border_radius=10,
-        padding=10,
-        width=page.width * 0.8,  # コンテナの幅を明示的に設定
-    )
-
-    # プロット表示用のコンテナ
-    plot_container = ft.Container(
-        content=ft.Column(
-            [
-                ft.Text("【残差プロット】：", size=20),
-                residual_image,
-                ft.Text("【予測値vs実測値】：", size=20),
-                prediction_image,
-            ],
-            scroll=ft.ScrollMode.ALWAYS,
-            spacing=10,
-        ),
-        expand=True,
-    )
-
-    status_text = ft.Text("", color=ft.Colors.GREEN_700)
-
-    # ラグ選択コンポーネントの初期化
-    lag_selector = LagSelector(page)
-
-    def run_analysis():
-        """ダイナミック回帰分析を実行し、結果を表示する"""
-        target, features = variable_selector.get_selected_variables()
-        if not target or not features:
-            status_text.value = "目的変数と説明変数を選択してください。"
-            status_text.color = ft.Colors.RED_700
-            page.update()
-            return
-
-        try:
-            # 変数の設定を取得
-            settings = variable_selector.get_variable_settings()
-            print(f"DEBUG: 変数設定: {settings}")
-
-            # 目的変数のデータを取得
-            target_df = get_dataframe_for_pattern(
-                initial_df,
-                settings[target]["transformation"],
-                settings[target]["standardization"],
-            )
-
-            # 説明変数のデータを取得
-            feature_dfs = []
-            for feature in features:
-                feature_df = get_dataframe_for_pattern(
-                    initial_df,
-                    settings[feature]["transformation"],
-                    settings[feature]["standardization"],
-                )
-                feature_dfs.append(feature_df[[feature]])
-
-            # データを結合
-            X = pd.concat(feature_dfs, axis=1)
-            y = target_df[target]
-
-            # ラグ設定を更新
-            lag_selector.update_features(features)
-
-            # ダイナミック回帰分析を実行
-            model, mean_cross_val_scores, mse, vifData = dynamic_regression_calc(
-                target, features, X, y, lag_selector.get_lag_settings()
-            )
-
-            # 結果を表示
-            result_col.controls = [
-                ft.Container(
-                    content=ft.Column(
-                        [
-                            ft.Text(
-                                "【分析結果】：", size=20, weight=ft.FontWeight.BOLD
-                            ),
-                            ft.Text(f"目的変数: {target}"),
-                            ft.Text(f"説明変数: {', '.join(features)}"),
-                            ft.Text("ラグ設定:"),
-                            *[
-                                ft.Text(
-                                    f"  {feature}: {lag}期 (最適ラグ次数: {lag_selector.optimal_lags.get(feature, '未計算')})",
-                                    size=14,
-                                )
-                                for feature, lag in lag_selector.get_lag_settings().items()
-                            ],
-                            ft.Text(
-                                f"ラグ次数選択基準: {lag_selector.criterion.upper()}",
-                                size=14,
-                                italic=True,
-                            ),
-                            ft.Text(
-                                f"交差検証の平均MSE: {mean_cross_val_scores:.2f}",
-                                selectable=True,
-                                style="monospace",
-                                size=14,
-                            ),
-                            ft.Text(
-                                f"モデルのMSE: {mse:.2f}",
-                                selectable=True,
-                                style="monospace",
-                                size=14,
-                            ),
-                            ft.Text("VIF値:", size=16),
-                            vif_table(vifData),
-                            ft.Row(
-                                [
-                                    regression_summary_table(model),
-                                    regression_diagnostics_table(model),
-                                ],
-                                vertical_alignment=ft.CrossAxisAlignment.START,
-                                scroll=ft.ScrollMode.AUTO,
-                                wrap=False,
-                            ),
-                            regression_stats_table(model),
-                        ],
-                        spacing=10,
-                    ),
-                    padding=10,
-                    width=page.width * 0.8,
-                )
-            ]
-
-            # 残差プロットを更新
-            y_pred = model.predict(sm.add_constant(X))
-            residual_image.src_base64 = plot_residuals(y.values, y_pred)
-
-            # 予測値vs実測値プロットを更新
-            dates = initial_df["kijyunnengetu"][y.index]
-            prediction_image.src_base64 = plot_predictions(y.values, y_pred, dates)
-
-            status_text.value = "分析が完了しました。"
-            status_text.color = ft.Colors.GREEN_700
-            page.update()
-
-        except Exception as e:
-            print(f"DEBUG: 分析実行中にエラーが発生: {str(e)}")
-            print(f"DEBUG: エラーの種類: {type(e)}")
-            import traceback
-
-            print(f"DEBUG: エラーの詳細:\n{traceback.format_exc()}")
-            status_text.value = f"分析実行中にエラーが発生しました: {str(e)}"
-            status_text.color = ft.Colors.RED_700
-            page.update()
-
-    # 分析実行ボタン
-    analyze_button = ft.ElevatedButton(
-        text="分析実行",
-        on_click=lambda _: run_analysis(),
-        style=ft.ButtonStyle(
-            color=ft.Colors.WHITE,
-            bgcolor=ft.Colors.BLUE,
-        ),
+    detail_column = ft.Column(
+        scroll=ft.ScrollMode.ALWAYS,
+        expand=1,
+        spacing=10,
     )
 
     # 変数選択コンポーネントの初期化
     variable_selector = VariableSelector(
         page=page,
         all_columns=all_columns,
-        on_variable_change=None,  # 自動更新を無効化
+        on_variable_change=lambda: on_variable_change(
+            page, variable_selector, lag_selector, result_column, detail_column
+        ),
     )
+
+    # ラグ設定コンポーネントの初期化
+    lag_selector = LagSelector(page)
 
     # UIコンポーネントを取得
     target_row, feature_container = variable_selector.get_ui_components()
+
+    # 分析実行ボタン
+    analyze_button = ft.ElevatedButton(
+        text="分析実行",
+        on_click=lambda _: run_dynamic_regression(
+            page, variable_selector, lag_selector, result_column, detail_column
+        ),
+        style=ft.ButtonStyle(
+            color=ft.Colors.WHITE,
+            bgcolor=ft.Colors.BLUE,
+        ),
+    )
+
+    # 左カラムのコンテンツをスクロール可能なコンテナに配置
+    left_column_content = ft.Column(
+        [
+            ft.Text("ダイナミック回帰分析", size=20, weight=ft.FontWeight.BOLD),
+            ft.Container(
+                content=target_row,
+                padding=10,
+                border=ft.border.all(1, ft.Colors.GREY_400),
+                border_radius=5,
+            ),
+            ft.Container(
+                content=ft.Column(
+                    [
+                        ft.Text("説明変数を選択：", size=16),
+                        feature_container,
+                    ]
+                ),
+                padding=10,
+                border=ft.border.all(1, ft.Colors.GREY_400),
+                border_radius=5,
+            ),
+            ft.Container(
+                content=lag_selector,
+                padding=10,
+                border=ft.border.all(1, ft.Colors.GREY_400),
+                border_radius=5,
+            ),
+            analyze_button,
+        ],
+        scroll=ft.ScrollMode.AUTO,
+        width=520,
+        height=page.height - 40,  # ページの高さからパディングを引く
+    )
+
+    # 右カラムのコンテンツ
+    right_column_content = ft.Container(
+        content=ft.Column(
+            [
+                ft.Container(
+                    content=ft.Column(
+                        [
+                            ft.Text(
+                                "【回帰分析結果】：", size=20, weight=ft.FontWeight.BOLD
+                            ),
+                            result_column,
+                        ]
+                    ),
+                    padding=10,
+                    border=ft.border.all(1, ft.Colors.GREY_400),
+                    border_radius=5,
+                    expand=True,
+                ),
+                ft.Container(
+                    content=ft.Column(
+                        [
+                            ft.Text(
+                                "【詳細分析】：", size=20, weight=ft.FontWeight.BOLD
+                            ),
+                            detail_column,
+                        ]
+                    ),
+                    padding=10,
+                    border=ft.border.all(1, ft.Colors.GREY_400),
+                    border_radius=5,
+                    expand=True,
+                ),
+            ],
+            spacing=20,
+            expand=True,
+        ),
+        expand=True,
+    )
 
     return ft.Container(
         padding=20,
         expand=True,
         content=ft.Row(
             [
-                # 左側：変数選択と設定
-                ft.Container(
-                    content=ft.Column(
-                        [
-                            ft.Text(
-                                "ダイナミック回帰モデル作成",
-                                size=20,
-                                weight=ft.FontWeight.BOLD,
-                            ),
-                            target_row,
-                            ft.Text("説明変数を選択：", size=16),
-                            feature_container,
-                            lag_selector.build(),  # build()メソッドを使用
-                            analyze_button,
-                            status_text,
-                        ],
-                        spacing=10,
-                    ),
-                    expand=True,
-                    padding=10,
-                ),
-                # 右側：分析結果
-                ft.Container(
-                    content=ft.Column(
-                        [
-                            result_scroll_container,
-                            plot_container,
-                        ],
-                        expand=True,
-                        spacing=10,
-                    ),
-                    expand=1,
-                ),
+                left_column_content,
+                ft.VerticalDivider(width=1),
+                right_column_content,
             ],
             expand=True,
-            spacing=20,
         ),
     )
+
+
+def on_variable_change(
+    page: ft.Page,
+    variable_selector: VariableSelector,
+    lag_selector: LagSelector,
+    result_column: ft.Column,
+    detail_column: ft.Column,
+):
+    """変数選択が変更されたときの処理"""
+    # 結果表示をクリア
+    result_column.controls.clear()
+    detail_column.controls.clear()
+
+    # ラグ設定を更新
+    target, features = variable_selector.get_selected_variables()
+    if features:
+        lag_selector.update_lag_settings(features)
+
+    page.update()
+
+
+def run_dynamic_regression(
+    page: ft.Page,
+    variable_selector: VariableSelector,
+    lag_selector: LagSelector,
+    result_column: ft.Column,
+    detail_column: ft.Column,
+):
+    """ダイナミック回帰分析を実行し、結果を表示する"""
+    try:
+        # 選択された変数を取得
+        target, features = variable_selector.get_selected_variables()
+        if not target or not features:
+            page.show_snack_bar(
+                ft.SnackBar(content=ft.Text("目的変数と説明変数を選択してください。"))
+            )
+            return
+
+        # 変数の設定を取得
+        settings = variable_selector.get_variable_settings()
+        print(f"DEBUG: 変数設定: {settings}")
+
+        # データの準備
+        initial_df = read_dataframe_from_sqlite("merged_data")
+        if initial_df is None or initial_df.empty:
+            page.show_snack_bar(
+                ft.SnackBar(content=ft.Text("データが読み込まれていません。"))
+            )
+            return
+
+        # 目的変数のデータを取得
+        target_df = get_dataframe_for_pattern(
+            initial_df,
+            settings[target]["transformation"],
+            settings[target]["standardization"],
+        )
+        y = target_df[target]
+
+        # 説明変数のデータを取得
+        feature_dfs = []
+        for feature in features:
+            feature_df = get_dataframe_for_pattern(
+                initial_df,
+                settings[feature]["transformation"],
+                settings[feature]["standardization"],
+            )
+            feature_dfs.append(feature_df[[feature]])
+
+        # データを結合
+        X = pd.concat(feature_dfs, axis=1)
+
+        # ラグ設定を取得
+        lag_settings = (
+            lag_selector.get_lag_settings() if lag_selector.include_lag else {}
+        )
+        print(f"DEBUG: ラグ設定: {lag_settings}")
+
+        # ラグ変数を追加
+        if lag_settings:
+            for feature, settings in lag_settings.items():
+                if settings["lag"] > 0:
+                    for lag in range(1, settings["lag"] + 1):
+                        lag_col = f"{feature}_lag{lag}"
+                        X[lag_col] = X[feature].shift(lag)
+
+        # 欠損値を削除
+        X = X.dropna()
+        y = y[X.index]
+
+        # 定数項を追加
+        X_with_const = sm.add_constant(X)
+
+        # モデルの構築と学習
+        model = sm.OLS(y, X_with_const).fit()
+
+        # 結果の表示
+        result_column.controls.clear()
+        result_column.controls.extend(
+            [
+                ft.Text("【回帰分析結果】：", size=20, weight=ft.FontWeight.BOLD),
+                ft.Text(f"目的変数: {target}"),
+                ft.Text(f"説明変数: {', '.join(features)}"),
+                ft.Text(f"サンプル数: {len(y)}"),
+                ft.Text(f"決定係数 (R²): {model.rsquared:.4f}"),
+                ft.Text(f"調整済み決定係数: {model.rsquared_adj:.4f}"),
+                ft.Text(f"F統計量: {model.fvalue:.4f}"),
+                ft.Text(f"F検定のp値: {model.f_pvalue:.4f}"),
+                ft.Divider(),
+                ft.Text("【係数】：", size=16, weight=ft.FontWeight.BOLD),
+                regression_summary_table(model),
+                ft.Divider(),
+                ft.Text("【診断統計量】：", size=16, weight=ft.FontWeight.BOLD),
+                regression_diagnostics_table(model),
+            ]
+        )
+
+        # 詳細分析の表示
+        detail_column.controls.clear()
+        detail_column.controls.extend(
+            [
+                ft.Text("【詳細分析】：", size=20, weight=ft.FontWeight.BOLD),
+                ft.Text("残差プロット：", size=16),
+                ft.Image(
+                    src_base64=plot_residuals(
+                        y.values, model.predict(X_with_const).values
+                    ),
+                    width=600,
+                    height=400,
+                ),
+                ft.Text("VIF値：", size=16),
+                vif_table(calculate_vif(X)),
+            ]
+        )
+
+        page.update()
+
+    except Exception as e:
+        print(f"DEBUG: 分析実行中にエラーが発生: {str(e)}")
+        print(f"DEBUG: エラーの種類: {type(e)}")
+        import traceback
+
+        print(f"DEBUG: エラーの詳細:\n{traceback.format_exc()}")
+        page.show_snack_bar(
+            ft.SnackBar(content=ft.Text(f"分析実行中にエラーが発生しました: {str(e)}"))
+        )
+
+
+def calculate_vif(X: pd.DataFrame) -> pd.DataFrame:
+    """VIF値を計算する"""
+    vif_data = pd.DataFrame()
+    vif_data["Feature"] = X.columns
+    vif_data["VIF"] = [
+        variance_inflation_factor(X.values, i) for i in range(X.shape[1])
+    ]
+    return vif_data
