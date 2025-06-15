@@ -139,16 +139,27 @@ def plot_residuals(y_true: np.ndarray, y_pred: np.ndarray) -> str:
     """
     residuals = y_true - y_pred
 
-    plt.figure(figsize=(6, 4))
-    sns.scatterplot(x=y_pred, y=residuals)
-    plt.axhline(0, color="red", linestyle="--")
+    plt.figure(figsize=(10, 6))
+
+    # 残差の散布図
+    plt.scatter(y_pred, residuals, alpha=0.5, label="残差")
+
+    # ゼロライン
+    plt.axhline(y=0, color="r", linestyle="--", alpha=0.7, label="ゼロライン")
+
+    # グラフの装飾
     plt.xlabel("予測値")
     plt.ylabel("残差")
     plt.title("残差 vs. 予測値")
+    plt.legend()
+    plt.grid(True, alpha=0.3)
+
+    # レイアウトの調整
     plt.tight_layout()
 
+    # プロットを画像に変換
     buf = io.BytesIO()
-    plt.savefig(buf, format="png")
+    plt.savefig(buf, format="png", dpi=100)
     plt.close()
     return base64.b64encode(buf.getvalue()).decode("utf-8")
 
@@ -158,17 +169,83 @@ def plot_predictions(y_true: np.ndarray, y_pred: np.ndarray, dates: pd.Series) -
     予測値と実測値の比較プロットを作成し、base64形式でエンコードされたPNG画像を返す
     """
     plt.figure(figsize=(10, 6))
-    plt.plot(dates, y_true, label="実測値", marker="o")
-    plt.plot(dates, y_pred, label="予測値", marker="x", linestyle="--")
+
+    # 実測値と予測値をプロット
+    plt.plot(dates, y_true, label="実測値", marker="o", markersize=4, alpha=0.7)
+    plt.plot(
+        dates,
+        y_pred,
+        label="予測値",
+        marker="x",
+        markersize=4,
+        linestyle="--",
+        alpha=0.7,
+    )
+
+    # グラフの装飾
     plt.xlabel("日付")
     plt.ylabel("値")
     plt.title("予測値 vs. 実測値")
     plt.legend()
+    plt.grid(True, alpha=0.3)
     plt.xticks(rotation=45)
+
+    # レイアウトの調整
     plt.tight_layout()
 
+    # プロットを画像に変換
     buf = io.BytesIO()
-    plt.savefig(buf, format="png")
+    plt.savefig(buf, format="png", dpi=100)
+    plt.close()
+    return base64.b64encode(buf.getvalue()).decode("utf-8")
+
+
+def plot_acf(residuals: np.ndarray, max_lag: int = 24) -> str:
+    """
+    残差の自己相関関数（ACF）プロットを作成し、base64形式でエンコードされたPNG画像を返す
+
+    Parameters:
+    -----------
+    residuals : np.ndarray
+        残差の配列
+    max_lag : int
+        最大ラグ次数（デフォルト: 24）
+
+    Returns:
+    --------
+    str
+        base64エンコードされたプロット画像
+    """
+    # 自己相関関数を計算
+    acf = sm.tsa.stattools.acf(residuals, nlags=max_lag)
+
+    # 信頼区間の計算（95%信頼区間）
+    n = len(residuals)
+    ci = 1.96 / np.sqrt(n)  # 95%信頼区間の境界値
+
+    plt.figure(figsize=(10, 6))
+
+    # ACFプロット（use_line_collectionパラメータを削除）
+    plt.stem(range(len(acf)), acf)
+
+    # 信頼区間の境界線
+    plt.axhline(y=0, color="black", linestyle="-", alpha=0.3)
+    plt.axhline(y=ci, color="r", linestyle="--", alpha=0.7, label="95%信頼区間")
+    plt.axhline(y=-ci, color="r", linestyle="--", alpha=0.7)
+
+    # グラフの装飾
+    plt.xlabel("ラグ")
+    plt.ylabel("自己相関係数")
+    plt.title("残差の自己相関関数（ACF）")
+    plt.legend()
+    plt.grid(True, alpha=0.3)
+
+    # レイアウトの調整
+    plt.tight_layout()
+
+    # プロットを画像に変換
+    buf = io.BytesIO()
+    plt.savefig(buf, format="png", dpi=100)
     plt.close()
     return base64.b64encode(buf.getvalue()).decode("utf-8")
 
@@ -803,6 +880,12 @@ def run_dynamic_regression(
         # モデルの構築と学習
         model = sm.OLS(y, X_with_const).fit()
 
+        # 予測値を計算
+        y_pred = model.predict(X_with_const)
+
+        # 残差を計算
+        residuals = y.values - y_pred.values
+
         # 結果の表示
         result_column.controls.clear()
         result_column.controls.extend(
@@ -829,16 +912,78 @@ def run_dynamic_regression(
         detail_column.controls.extend(
             [
                 ft.Text("【詳細分析】：", size=20, weight=ft.FontWeight.BOLD),
-                ft.Text("残差プロット：", size=16),
-                ft.Image(
-                    src_base64=plot_residuals(
-                        y.values, model.predict(X_with_const).values
+                ft.Container(
+                    content=ft.Column(
+                        [
+                            ft.Text(
+                                "予測値と実測値の比較：",
+                                size=16,
+                                weight=ft.FontWeight.BOLD,
+                            ),
+                            ft.Image(
+                                src_base64=plot_predictions(
+                                    y.values, y_pred.values, y.index
+                                ),
+                                width=600,
+                                height=400,
+                            ),
+                        ]
                     ),
-                    width=600,
-                    height=400,
+                    padding=10,
+                    border=ft.border.all(1, ft.Colors.GREY_400),
+                    border_radius=5,
                 ),
-                ft.Text("VIF値：", size=16),
-                vif_table(calculate_vif(X)),
+                ft.Container(
+                    content=ft.Column(
+                        [
+                            ft.Text(
+                                "残差プロット：", size=16, weight=ft.FontWeight.BOLD
+                            ),
+                            ft.Image(
+                                src_base64=plot_residuals(y.values, y_pred.values),
+                                width=600,
+                                height=400,
+                            ),
+                        ]
+                    ),
+                    padding=10,
+                    border=ft.border.all(1, ft.Colors.GREY_400),
+                    border_radius=5,
+                ),
+                ft.Container(
+                    content=ft.Column(
+                        [
+                            ft.Text(
+                                "残差の自己相関：", size=16, weight=ft.FontWeight.BOLD
+                            ),
+                            ft.Image(
+                                src_base64=plot_acf(residuals),
+                                width=600,
+                                height=400,
+                            ),
+                            ft.Text(
+                                "※ 点線は95%信頼区間を示します。信頼区間内に収まっている場合、そのラグでの自己相関は統計的に有意ではありません。",
+                                size=12,
+                                italic=True,
+                                color=ft.Colors.GREY_700,
+                            ),
+                        ]
+                    ),
+                    padding=10,
+                    border=ft.border.all(1, ft.Colors.GREY_400),
+                    border_radius=5,
+                ),
+                ft.Container(
+                    content=ft.Column(
+                        [
+                            ft.Text("VIF値：", size=16, weight=ft.FontWeight.BOLD),
+                            vif_table(calculate_vif(X)),
+                        ]
+                    ),
+                    padding=10,
+                    border=ft.border.all(1, ft.Colors.GREY_400),
+                    border_radius=5,
+                ),
             ]
         )
 
@@ -850,9 +995,13 @@ def run_dynamic_regression(
         import traceback
 
         print(f"DEBUG: エラーの詳細:\n{traceback.format_exc()}")
-        page.show_snack_bar(
-            ft.SnackBar(content=ft.Text(f"分析実行中にエラーが発生しました: {str(e)}"))
+        # スナックバーの表示方法を修正
+        snack = ft.SnackBar(
+            content=ft.Text(f"分析実行中にエラーが発生しました: {str(e)}")
         )
+        page.snack_bar = snack
+        snack.open = True
+        page.update()
 
 
 def calculate_vif(X: pd.DataFrame) -> pd.DataFrame:
