@@ -9,3 +9,5 @@ db/regression_data.db
 database.db
 utils/__pycache__
 Documents/2025-06-13-python-flet-data-preprocessing-tool.md
+analysis_results
+.DS_Store
