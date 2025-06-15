@@ -15,8 +15,20 @@ from statsmodels.stats.outliers_influence import variance_inflation_factor
 from statsmodels.stats.stattools import durbin_watson, jarque_bera
 from math import ceil
 
-# seabornの日本語文字化け防止にフォントを指定する
+# フォントの設定
+plt.rcParams["font.family"] = "sans-serif"
+plt.rcParams["font.sans-serif"] = [
+    "Yu Gothic",
+    "Meiryo",
+    "MS Gothic",
+    "Hiragino Maru Gothic Pro",
+    "Arial",
+]
+plt.rcParams["axes.unicode_minus"] = False  # マイナス記号の文字化け防止
+
+# seabornの設定
 sns.set(font="Yu Gothic")
+sns.set_style("whitegrid")
 
 figsize = (12, 6)
 
