@@ -333,37 +333,49 @@ class LagSelector(ft.Container):
 
     def _optimize_lag_order(self, e):
         """ラグ次数の最適化を実行"""
-        if not self.lag_settings:
-            return
+        try:
+            if not self.lag_settings:
+                return
 
-        for feature in self.lag_settings.keys():
-            # 最適化方法に基づいてラグ次数を計算
-            if self.optimization_method == "aic":
-                optimal_lag = self._calculate_optimal_lag_aic(feature)
-            elif self.optimization_method == "bic":
-                optimal_lag = self._calculate_optimal_lag_bic(feature)
-            else:  # cv
-                optimal_lag = self._calculate_optimal_lag_cv(feature)
+            # データを取得
+            df = read_dataframe_from_sqlite("merged_data")
+            if df is None or df.empty:
+                raise ValueError("データが読み込まれていません。")
 
-            self.lag_settings[feature]["lag"] = optimal_lag
+            # 各変数について最適なラグ次数を計算
+            for feature in self.lag_settings.keys():
+                data = df[feature]
+                optimal_lag = find_optimal_lag_order(
+                    data=data,
+                    max_lag=self.max_lag,
+                    criterion=self.optimization_method,
+                    min_lag=1,
+                )
+                self.lag_settings[feature]["optimal_lag"] = optimal_lag
+                self.lag_settings[feature]["lag"] = optimal_lag  # スライダーの値も更新
 
-        self._update_lag_ui()
-        self.page.update()
+            # UIを更新
+            self._update_lag_ui()
 
-    def _calculate_optimal_lag_aic(self, feature):
-        """AICに基づく最適なラグ次数を計算"""
-        # TODO: AICに基づく最適化の実装
-        return min(5, self.max_lag)  # 仮の実装
+            # 成功メッセージを表示
+            method_name = {"aic": "AIC", "bic": "BIC", "cv": "交差検証"}[
+                self.optimization_method
+            ]
+            snack = ft.SnackBar(
+                content=ft.Text(f"{method_name}による最適なラグ次数を計算しました。")
+            )
+            self.page.snack_bar = snack
+            snack.open = True
+            self.page.update()
 
-    def _calculate_optimal_lag_bic(self, feature):
-        """BICに基づく最適なラグ次数を計算"""
-        # TODO: BICに基づく最適化の実装
-        return min(4, self.max_lag)  # 仮の実装
-
-    def _calculate_optimal_lag_cv(self, feature):
-        """交差検証に基づく最適なラグ次数を計算"""
-        # TODO: 交差検証に基づく最適化の実装
-        return min(6, self.max_lag)  # 仮の実装
+        except Exception as e:
+            print(f"DEBUG: 最適ラグ計算中にエラーが発生: {str(e)}")
+            snack = ft.SnackBar(
+                content=ft.Text(f"最適ラグ計算中にエラーが発生しました: {str(e)}")
+            )
+            self.page.snack_bar = snack
+            snack.open = True
+            self.page.update()
 
     def _update_lag_ui(self):
         """ラグ設定のUIを更新"""
@@ -379,6 +391,21 @@ class LagSelector(ft.Container):
                 lag_text = ft.Text(
                     f"ラグ次数: {self.lag_settings[feature]['lag']}次",
                     size=14,
+                )
+
+                # 最適ラグ次数の表示（計算済みの場合）
+                optimal_lag = self.lag_settings[feature].get("optimal_lag")
+                method_name = {"aic": "AIC", "bic": "BIC", "cv": "交差検証"}[
+                    self.optimization_method
+                ]
+                optimal_text = ft.Text(
+                    (
+                        f"（{method_name}推奨: {optimal_lag}次）"
+                        if optimal_lag is not None
+                        else ""
+                    ),
+                    size=14,
+                    color=ft.Colors.BLUE,
                 )
 
                 # ラグ次数のスライダー
@@ -401,7 +428,7 @@ class LagSelector(ft.Container):
                         ft.Column(
                             [
                                 ft.Row(
-                                    [lag_slider, lag_text],
+                                    [lag_slider, lag_text, optimal_text],
                                     alignment=ft.MainAxisAlignment.START,
                                 ),
                             ],
@@ -423,7 +450,10 @@ class LagSelector(ft.Container):
             if feature in self.lag_settings:
                 new_settings[feature] = self.lag_settings[feature]
             else:
-                new_settings[feature] = {"lag": 0}  # 初期値として辞書を設定
+                new_settings[feature] = {
+                    "lag": 0,
+                    "optimal_lag": None,  # 最適ラグ次数の初期値
+                }
         self.lag_settings = new_settings
         self._update_lag_ui()
 
