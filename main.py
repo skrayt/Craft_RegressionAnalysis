@@ -22,6 +22,7 @@ from pages.page_time_series import time_series_page  # 統合された時系列�
 from pages.page_dynamic_regression import (
     dynamic_regression_page,
 )  # ダイナミック回帰分析ページ
+from pages.page_model_selection import model_selection_page  # 新しいページをインポート
 from components.data_cleansing import (
     explanatory_variable,
     response_variable,
@@ -103,6 +104,10 @@ def main(page: ft.Page):
                     body.controls.append(
                         dynamic_regression_page(page)
                     )  # ダイナミック回帰分析ページ
+                elif selected_index == 6:
+                    body.controls.append(
+                        model_selection_page(page)
+                    )  # 新しいページを追加
                 page.update()
 
             # タブメニュー
@@ -116,6 +121,7 @@ def main(page: ft.Page):
                     ft.Tab(text="④ ARIMAモデル"),
                     ft.Tab(text="⑤ 時系列データ分析"),  # 統合された時系列データページ
                     ft.Tab(text="⑥ ダイナミック回帰分析"),  # ダイナミック回帰分析ページ
+                    ft.Tab(text="⑦ モデル候補評価"),  # 新しいタブを追加
                 ],
             )
 
