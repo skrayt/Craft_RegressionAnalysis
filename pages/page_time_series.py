@@ -83,6 +83,14 @@ explanatory_graphs_scroll_view = ft.Column(
     alignment=ft.MainAxisAlignment.START,
 )
 
+# 散布図表示用のコンテナ
+scatter_plot_container = ft.Column(
+    scroll=ft.ScrollMode.AUTO,
+    height=400,
+    expand=True,
+    alignment=ft.MainAxisAlignment.START,
+)
+
 
 def plot_single_time_series_to_ax(
     ax, df: pd.DataFrame, column: str, transformation_type: str, is_standardized: bool
@@ -136,6 +144,66 @@ def plot_single_time_series_to_ax(
     plt.tight_layout()
 
 
+def plot_scatter_matrix(
+    df: pd.DataFrame, target: str, features: list, figsize=(12, 8)
+) -> str:
+    """
+    目的変数と説明変数の散布図行列を生成する
+
+    Parameters:
+    -----------
+    df : pd.DataFrame
+        データフレーム
+    target : str
+        目的変数名
+    features : list
+        説明変数名のリスト
+    figsize : tuple
+        グラフのサイズ
+
+    Returns:
+    --------
+    str
+        グラフのbase64エンコードされた文字列
+    """
+    # グラフの設定
+    plt.figure(figsize=figsize)
+
+    # 散布図行列の作成
+    n_features = len(features)
+    n_cols = min(3, n_features)  # 1行あたり最大3つのグラフ
+    n_rows = ceil(n_features / n_cols)
+
+    for i, feature in enumerate(features, 1):
+        plt.subplot(n_rows, n_cols, i)
+
+        # 散布図の作成
+        plt.scatter(df[feature], df[target], alpha=0.5)
+
+        # 回帰直線の追加
+        z = np.polyfit(df[feature], df[target], 1)
+        p = np.poly1d(z)
+        plt.plot(df[feature], p(df[feature]), "r--", alpha=0.8)
+
+        # 相関係数の計算と表示
+        corr = df[feature].corr(df[target])
+        plt.title(f"{feature} vs {target}\n相関係数: {corr:.3f}")
+        plt.xlabel(feature)
+        plt.ylabel(target)
+        plt.grid(True, linestyle="--", alpha=0.7)
+
+    plt.tight_layout()
+
+    # グラフをbase64エンコード
+    buf = io.BytesIO()
+    plt.savefig(buf, format="png", dpi=300, bbox_inches="tight")
+    buf.seek(0)
+    img_str = base64.b64encode(buf.read()).decode()
+    plt.close()
+
+    return img_str
+
+
 def time_series_page(page: ft.Page) -> ft.Container:
     """時系列データ分析ページを構築する関数"""
 
@@ -155,21 +223,6 @@ def time_series_page(page: ft.Page) -> ft.Container:
 
     # kijyunnengetu以外のカラムを取得
     all_columns = [col for col in initial_df.columns if col != "kijyunnengetu"]
-
-    # # グラフ表示用のコンテナ
-    # response_graph_display_container = ft.Column(
-    #     scroll=ft.ScrollMode.AUTO,
-    #     height=300,
-    #     expand=True,
-    #     alignment=ft.MainAxisAlignment.START
-    # )
-
-    # explanatory_graphs_scroll_view = ft.Column(
-    #     scroll=ft.ScrollMode.AUTO,
-    #     height=400,
-    #     expand=True,
-    #     alignment=ft.MainAxisAlignment.START
-    # )
 
     # ステータス表示用のテキスト
     status_text = ft.Text("", color=ft.Colors.GREEN_700)
@@ -214,6 +267,7 @@ def time_series_page(page: ft.Page) -> ft.Container:
             # グラフコンテナをクリア
             response_graph_display_container.controls.clear()
             explanatory_graphs_scroll_view.controls.clear()
+            scatter_plot_container.controls.clear()
 
             # 目的変数のグラフを生成
             response_img_base64 = plot_single_time_series(
@@ -263,6 +317,31 @@ def time_series_page(page: ft.Page) -> ft.Container:
                         ),
                         padding=10,
                         border=ft.border.all(2, ft.Colors.GREY_300),
+                        border_radius=10,
+                    )
+                )
+
+                # 散布図行列を生成
+                scatter_matrix_df = pd.concat(
+                    [target_df[[target]], X[features]], axis=1
+                )
+                scatter_img_base64 = plot_scatter_matrix(
+                    scatter_matrix_df,
+                    target,
+                    features,
+                    figsize=(12, 4 * ceil(len(features) / 3)),
+                )
+
+                # 散布図をコンテナに追加
+                scatter_plot_container.controls.append(
+                    ft.Container(
+                        content=ft.Image(
+                            src_base64=scatter_img_base64,
+                            width=800,
+                            height=400 * ceil(len(features) / 3),
+                        ),
+                        padding=10,
+                        border=ft.border.all(2, ft.Colors.GREEN_200),
                         border_radius=10,
                     )
                 )
@@ -328,6 +407,20 @@ def time_series_page(page: ft.Page) -> ft.Container:
                             [
                                 ft.Text("説明変数の時系列グラフ：", size=16),
                                 explanatory_graphs_scroll_view,
+                            ],
+                            expand=True,
+                            alignment=ft.MainAxisAlignment.START,
+                        ),
+                    ],
+                    expand=True,
+                    vertical_alignment=ft.CrossAxisAlignment.START,
+                ),
+                ft.Row(
+                    [
+                        ft.Column(
+                            [
+                                ft.Text("散布図行列：", size=16),
+                                scatter_plot_container,
                             ],
                             expand=True,
                             alignment=ft.MainAxisAlignment.START,
