@@ -18,8 +18,6 @@ from sklearn.metrics import mean_squared_error
 from sklearn.model_selection import cross_val_score, TimeSeriesSplit
 import statsmodels.api as sm
 from statsmodels.stats.outliers_influence import variance_inflation_factor
-from datetime import datetime
-from pathlib import Path
 
 from components.plot_utils import (
     regression_summary_table,
@@ -424,19 +422,20 @@ class LagSelector(ft.Container):
                 )
 
                 # 変数ごとの設定行
-                feature_row = ft.Row(
+                feature_row = ft.Column(
                     [
-                        ft.Text(feature, size=14, width=100),
-                        ft.Column(
+                        ft.Row(
                             [
-                                ft.Row(
-                                    [lag_slider, lag_text, optimal_text],
-                                    alignment=ft.MainAxisAlignment.START,
-                                ),
+                                ft.Text(feature, size=14, width=120),
+                                lag_slider,
+                                lag_text,
                             ],
-                            spacing=5,
+                            alignment=ft.MainAxisAlignment.START,
                         ),
+                        optimal_text,
                     ],
+                    spacing=0,
+                    horizontal_alignment=ft.CrossAxisAlignment.START,
                     alignment=ft.MainAxisAlignment.START,
                 )
                 self.lag_settings_column.controls.append(feature_row)
@@ -704,66 +703,6 @@ def dynamic_regression_page(page: ft.Page) -> ft.Container:
         spacing=10,
     )
 
-    # 分析結果を保持する変数
-    analysis_results = {
-        "target": None,
-        "features": None,
-        "model": None,
-        "X": None,
-        "y": None,
-        "y_pred": None,
-        "lag_settings": None,
-        "include_lag": None,
-        "optimization_method": None,
-    }
-
-    # 保存ボタンをグローバル変数として保持
-    save_button = ft.ElevatedButton(
-        text="分析結果を保存",
-        on_click=lambda e: save_results(e, analysis_results, page),
-        style=ft.ButtonStyle(
-            color=ft.Colors.WHITE,
-            bgcolor=ft.Colors.GREEN,
-        ),
-        disabled=True,  # 初期状態は無効
-    )
-
-    def save_results(e, results: dict, page: ft.Page):
-        """分析結果をHTMLファイルとして保存"""
-        try:
-            if results["model"] is None:
-                page.show_snack_bar(
-                    ft.SnackBar(content=ft.Text("分析が実行されていません。"))
-                )
-                return
-
-            filepath = save_analysis_results_to_html(
-                target=results["target"],
-                features=results["features"],
-                model=results["model"],
-                X=results["X"],
-                y=results["y"],
-                y_pred=results["y_pred"],
-                lag_settings=results["lag_settings"],
-                include_lag=results["include_lag"],
-                optimization_method=results["optimization_method"],
-            )
-
-            # 保存成功メッセージを表示
-            snack = ft.SnackBar(content=ft.Text(f"分析結果を保存しました: {filepath}"))
-            page.snack_bar = snack
-            snack.open = True
-            page.update()
-
-        except Exception as e:
-            print(f"DEBUG: 結果保存中にエラーが発生: {str(e)}")
-            snack = ft.SnackBar(
-                content=ft.Text(f"結果の保存中にエラーが発生しました: {str(e)}")
-            )
-            page.snack_bar = snack
-            snack.open = True
-            page.update()
-
     # 変数選択コンポーネントの初期化
     variable_selector = VariableSelector(
         page=page,
@@ -783,25 +722,12 @@ def dynamic_regression_page(page: ft.Page) -> ft.Container:
     analyze_button = ft.ElevatedButton(
         text="分析実行",
         on_click=lambda _: run_dynamic_regression(
-            page,
-            variable_selector,
-            lag_selector,
-            result_column,
-            detail_column,
-            analysis_results,
-            save_button,
+            page, variable_selector, lag_selector, result_column, detail_column
         ),
         style=ft.ButtonStyle(
             color=ft.Colors.WHITE,
             bgcolor=ft.Colors.BLUE,
         ),
-    )
-
-    # ボタンを横に並べる
-    button_row = ft.Row(
-        [analyze_button, save_button],
-        alignment=ft.MainAxisAlignment.START,
-        spacing=10,
     )
 
     # 左カラムのコンテンツをスクロール可能なコンテナに配置
@@ -831,10 +757,10 @@ def dynamic_regression_page(page: ft.Page) -> ft.Container:
                 border=ft.border.all(1, ft.Colors.GREY_400),
                 border_radius=5,
             ),
-            button_row,
+            analyze_button,
         ],
         scroll=ft.ScrollMode.AUTO,
-        width=520,
+        width=500,
         height=page.height - 40,  # ページの高さからパディングを引く
     )
 
@@ -854,7 +780,7 @@ def dynamic_regression_page(page: ft.Page) -> ft.Container:
                     padding=10,
                     border=ft.border.all(1, ft.Colors.GREY_400),
                     border_radius=5,
-                    expand=True,
+                    expand=3,
                 ),
                 ft.Container(
                     content=ft.Column(
@@ -868,7 +794,7 @@ def dynamic_regression_page(page: ft.Page) -> ft.Container:
                     padding=10,
                     border=ft.border.all(1, ft.Colors.GREY_400),
                     border_radius=5,
-                    expand=True,
+                    expand=4,
                 ),
             ],
             spacing=20,
@@ -911,238 +837,12 @@ def on_variable_change(
     page.update()
 
 
-def save_analysis_results_to_html(
-    target: str,
-    features: list[str],
-    model: sm.OLS,
-    X: pd.DataFrame,
-    y: pd.Series,
-    y_pred: np.ndarray,
-    lag_settings: dict,
-    include_lag: bool,
-    optimization_method: str,
-) -> str:
-    """
-    分析結果をHTMLファイルとして保存する
-
-    Parameters:
-    -----------
-    target : str
-        目的変数名
-    features : list[str]
-        説明変数名のリスト
-    model : sm.OLS
-        回帰モデル
-    X : pd.DataFrame
-        説明変数のデータ
-    y : pd.Series
-        目的変数のデータ
-    y_pred : np.ndarray
-        予測値
-    lag_settings : dict
-        ラグ設定
-    include_lag : bool
-        ラグ変数を含めるかどうか
-    optimization_method : str
-        最適化方法
-
-    Returns:
-    --------
-    str
-        保存したファイルのパス
-    """
-    # 現在の日時を取得
-    now = datetime.now()
-    timestamp = now.strftime("%Y%m%d_%H%M%S")
-
-    # 出力ディレクトリの作成
-    output_dir = Path("analysis_results")
-    output_dir.mkdir(exist_ok=True)
-
-    # ファイル名の生成
-    filename = f"dynamic_regression_analysis_{timestamp}.html"
-    filepath = output_dir / filename
-
-    # 残差の計算
-    residuals = y.values - y_pred
-
-    # HTMLテンプレート
-    html_content = f"""
-    <!DOCTYPE html>
-    <html>
-    <head>
-        <meta charset="UTF-8">
-        <title>ダイナミック回帰分析結果</title>
-        <style>
-            body {{ font-family: Arial, sans-serif; margin: 20px; }}
-            h1, h2 {{ color: #333; }}
-            table {{ border-collapse: collapse; width: 100%; margin: 10px 0; }}
-            th, td {{ border: 1px solid #ddd; padding: 8px; text-align: left; }}
-            th {{ background-color: #f5f5f5; }}
-            .section {{ margin: 20px 0; padding: 10px; border: 1px solid #ddd; }}
-            .plot {{ margin: 20px 0; text-align: center; }}
-            .plot img {{ max-width: 100%; height: auto; }}
-        </style>
-    </head>
-    <body>
-        <h1>ダイナミック回帰分析結果</h1>
-        <p>分析日時: {now.strftime("%Y-%m-%d %H:%M:%S")}</p>
-
-        <div class="section">
-            <h2>分析設定</h2>
-            <table>
-                <tr><th>目的変数</th><td>{target}</td></tr>
-                <tr><th>説明変数</th><td>{', '.join(features)}</td></tr>
-                <tr><th>サンプル数</th><td>{len(y)}</td></tr>
-                <tr><th>ラグ変数の使用</th><td>{'はい' if include_lag else 'いいえ'}</td></tr>
-                <tr><th>最適化方法</th><td>{optimization_method.upper()}</td></tr>
-            </table>
-        </div>
-
-        <div class="section">
-            <h2>ラグ設定</h2>
-            <table>
-                <tr>
-                    <th>変数名</th>
-                    <th>ラグ次数</th>
-                    <th>最適ラグ次数</th>
-                </tr>
-    """
-
-    # ラグ設定の表を追加
-    for feature in features:
-        if feature in lag_settings:
-            settings = lag_settings[feature]
-            optimal_lag = settings.get("optimal_lag", "未計算")
-            html_content += f"""
-                <tr>
-                    <td>{feature}</td>
-                    <td>{settings['lag']}</td>
-                    <td>{optimal_lag}</td>
-                </tr>
-            """
-
-    html_content += """
-            </table>
-        </div>
-
-        <div class="section">
-            <h2>回帰分析結果</h2>
-            <table>
-                <tr><th>決定係数 (R²)</th><td>{:.4f}</td></tr>
-                <tr><th>調整済み決定係数</th><td>{:.4f}</td></tr>
-                <tr><th>F統計量</th><td>{:.4f}</td></tr>
-                <tr><th>F検定のp値</th><td>{:.4f}</td></tr>
-            </table>
-        </div>
-    """.format(
-        model.rsquared, model.rsquared_adj, model.fvalue, model.f_pvalue
-    )
-
-    # 係数の表を追加
-    html_content += """
-        <div class="section">
-            <h2>係数</h2>
-            <table>
-                <tr>
-                    <th>変数</th>
-                    <th>係数</th>
-                    <th>標準誤差</th>
-                    <th>t値</th>
-                    <th>p値</th>
-                </tr>
-    """
-
-    for i, var in enumerate(model.model.exog_names):
-        html_content += f"""
-                <tr>
-                    <td>{var}</td>
-                    <td>{model.params[i]:.4f}</td>
-                    <td>{model.bse[i]:.4f}</td>
-                    <td>{model.tvalues[i]:.4f}</td>
-                    <td>{model.pvalues[i]:.4f}</td>
-                </tr>
-        """
-
-    html_content += """
-            </table>
-        </div>
-    """
-
-    # VIF値の表を追加
-    vif_data = calculate_vif(X)
-    html_content += """
-        <div class="section">
-            <h2>VIF値</h2>
-            <table>
-                <tr>
-                    <th>変数</th>
-                    <th>VIF</th>
-                </tr>
-    """
-
-    for _, row in vif_data.iterrows():
-        html_content += f"""
-                <tr>
-                    <td>{row['Feature']}</td>
-                    <td>{row['VIF']:.4f}</td>
-                </tr>
-        """
-
-    html_content += """
-            </table>
-        </div>
-    """
-
-    # プロットを追加
-    html_content += """
-        <div class="section">
-            <h2>予測値と実測値の比較</h2>
-            <div class="plot">
-    """
-    html_content += f'<img src="data:image/png;base64,{plot_predictions(y.values, y_pred, y.index)}" alt="予測値と実測値の比較">'
-    html_content += """
-            </div>
-        </div>
-
-        <div class="section">
-            <h2>残差プロット</h2>
-            <div class="plot">
-    """
-    html_content += f'<img src="data:image/png;base64,{plot_residuals(y.values, y_pred)}" alt="残差プロット">'
-    html_content += """
-            </div>
-        </div>
-
-        <div class="section">
-            <h2>残差の自己相関</h2>
-            <div class="plot">
-    """
-    html_content += (
-        f'<img src="data:image/png;base64,{plot_acf(residuals)}" alt="残差の自己相関">'
-    )
-    html_content += """
-            </div>
-        </div>
-    </body>
-    </html>
-    """
-
-    # ファイルに保存
-    with open(filepath, "w", encoding="utf-8") as f:
-        f.write(html_content)
-
-    return str(filepath)
-
-
 def run_dynamic_regression(
     page: ft.Page,
     variable_selector: VariableSelector,
     lag_selector: LagSelector,
     result_column: ft.Column,
     detail_column: ft.Column,
-    analysis_results: dict,
-    save_button: ft.ElevatedButton,
 ):
     """ダイナミック回帰分析を実行し、結果を表示する"""
     try:
@@ -1214,39 +914,61 @@ def run_dynamic_regression(
         # 予測値を計算
         y_pred = model.predict(X_with_const)
 
-        # 分析結果を保存
-        analysis_results.update(
-            {
-                "target": target,
-                "features": features,
-                "model": model,
-                "X": X,
-                "y": y,
-                "y_pred": y_pred,
-                "lag_settings": lag_settings,
-                "include_lag": lag_selector.include_lag,
-                "optimization_method": lag_selector.optimization_method,
-            }
-        )
+        # 残差を計算
+        residuals = y.values - y_pred.values
 
         # 結果の表示
         result_column.controls.clear()
         result_column.controls.extend(
             [
-                ft.Text("【回帰分析結果】", size=20, weight=ft.FontWeight.BOLD),
-                ft.Text(f"目的変数: {target}"),
-                ft.Text(f"説明変数: {', '.join(features)}"),
-                ft.Text(f"サンプル数: {len(y)}"),
-                ft.Text(f"決定係数 (R²): {model.rsquared:.4f}"),
-                ft.Text(f"調整済み決定係数: {model.rsquared_adj:.4f}"),
-                ft.Text(f"F統計量: {model.fvalue:.4f}"),
-                ft.Text(f"F検定のp値: {model.f_pvalue:.4f}"),
-                ft.Divider(),
-                ft.Text("【係数】", size=16, weight=ft.FontWeight.BOLD),
-                regression_summary_table(model),
-                ft.Divider(),
-                ft.Text("【診断統計量】", size=16, weight=ft.FontWeight.BOLD),
-                regression_diagnostics_table(model),
+                ft.Row(
+                    [
+                        ft.Text("【回帰分析結果】", size=20, weight=ft.FontWeight.BOLD),
+                        ft.Divider(),
+                    ]
+                ),
+                ft.Row(
+                    [
+                        ft.Column(
+                            [
+                                ft.Text("【概要】", size=16, weight=ft.FontWeight.BOLD),
+                                ft.Text(f"目的変数: {target}"),
+                                ft.Text(f"説明変数: {', '.join(features)}"),
+                                ft.Text(f"サンプル数: {len(y)}"),
+                                ft.Text(f"決定係数 (R²): {model.rsquared:.4f}"),
+                                ft.Text(f"調整済み決定係数: {model.rsquared_adj:.4f}"),
+                                ft.Text(f"F統計量: {model.fvalue:.4f}"),
+                                ft.Text(f"F検定のp値: {model.f_pvalue:.4f}"),
+                                ft.Text(f"AIC: {model.aic:.2f}"),
+                                ft.Text(f"BIC: {model.bic:.2f}"),
+                            ],
+                            # alignment=ft.MainAxisAlignment.START
+                        ),
+                        ft.Column(
+                            [
+                                ft.Text("【係数】", size=16, weight=ft.FontWeight.BOLD),
+                                regression_summary_table(model),
+                            ],
+                            # alignment=ft.MainAxisAlignment.START
+                        ),
+                        ft.Column(
+                            [
+                                ft.Text(
+                                    "【診断統計量】", size=16, weight=ft.FontWeight.BOLD
+                                ),
+                                regression_diagnostics_table(model),
+                            ],
+                            # alignment=ft.MainAxisAlignment.START
+                        ),
+                        ft.Column(
+                            [
+                                ft.Text("VIF値", size=16, weight=ft.FontWeight.BOLD),
+                                vif_table(calculate_vif(X)),
+                            ]
+                        ),
+                    ],
+                    vertical_alignment=ft.CrossAxisAlignment.START,
+                ),
             ]
         )
 
@@ -1254,82 +976,96 @@ def run_dynamic_regression(
         detail_column.controls.clear()
         detail_column.controls.extend(
             [
-                ft.Text("【詳細分析】", size=20, weight=ft.FontWeight.BOLD),
-                ft.Container(
-                    content=ft.Column(
-                        [
-                            ft.Text(
-                                "予測値と実測値の比較",
-                                size=16,
-                                weight=ft.FontWeight.BOLD,
-                            ),
-                            ft.Image(
-                                src_base64=plot_predictions(
-                                    y.values, y_pred.values, y.index
-                                ),
-                                width=600,
-                                height=400,
-                            ),
-                        ]
-                    ),
-                    padding=10,
-                    border=ft.border.all(1, ft.Colors.GREY_400),
-                    border_radius=5,
+                ft.Row(
+                    [
+                        ft.Text("【詳細分析】", size=20, weight=ft.FontWeight.BOLD),
+                    ]
                 ),
-                ft.Container(
-                    content=ft.Column(
-                        [
-                            ft.Text("残差プロット", size=16, weight=ft.FontWeight.BOLD),
-                            ft.Image(
-                                src_base64=plot_residuals(y.values, y_pred.values),
-                                width=600,
-                                height=400,
+                ft.Row(
+                    [
+                        ft.Container(
+                            content=ft.Column(
+                                [
+                                    ft.Text(
+                                        "予測値と実測値の比較",
+                                        size=16,
+                                        weight=ft.FontWeight.BOLD,
+                                    ),
+                                    ft.Image(
+                                        src_base64=plot_predictions(
+                                            y.values, y_pred.values, y.index
+                                        ),
+                                        width=400,
+                                        height=300,
+                                    ),
+                                ]
                             ),
-                        ]
-                    ),
-                    padding=10,
-                    border=ft.border.all(1, ft.Colors.GREY_400),
-                    border_radius=5,
+                            padding=10,
+                            border=ft.border.all(1, ft.Colors.GREY_400),
+                            border_radius=5,
+                        ),
+                        ft.Container(
+                            content=ft.Column(
+                                [
+                                    ft.Text(
+                                        "残差プロット",
+                                        size=16,
+                                        weight=ft.FontWeight.BOLD,
+                                    ),
+                                    ft.Image(
+                                        src_base64=plot_residuals(
+                                            y.values, y_pred.values
+                                        ),
+                                        width=400,
+                                        height=300,
+                                    ),
+                                ]
+                            ),
+                            padding=10,
+                            border=ft.border.all(1, ft.Colors.GREY_400),
+                            border_radius=5,
+                        ),
+                        ft.Container(
+                            content=ft.Column(
+                                [
+                                    ft.Text(
+                                        "残差の自己相関",
+                                        size=16,
+                                        weight=ft.FontWeight.BOLD,
+                                    ),
+                                    ft.Image(
+                                        src_base64=plot_acf(residuals),
+                                        width=400,
+                                        height=300,
+                                    ),
+                                    ft.Text(
+                                        "※ 点線は95%信頼区間を示します。\n信頼区間内に収まっている場合、そのラグでの自己相関は統計的に有意ではありません。",
+                                        size=12,
+                                        italic=True,
+                                        color=ft.Colors.GREY_700,
+                                    ),
+                                ]
+                            ),
+                            padding=10,
+                            border=ft.border.all(1, ft.Colors.GREY_400),
+                            border_radius=5,
+                        ),
+                    ],
+                    vertical_alignment=ft.CrossAxisAlignment.START,
                 ),
-                ft.Container(
-                    content=ft.Column(
-                        [
-                            ft.Text(
-                                "残差の自己相関", size=16, weight=ft.FontWeight.BOLD
-                            ),
-                            ft.Image(
-                                src_base64=plot_acf(y.values - y_pred.values),
-                                width=600,
-                                height=400,
-                            ),
-                            ft.Text(
-                                "※ 点線は95%信頼区間を示します。信頼区間内に収まっている場合、そのラグでの自己相関は統計的に有意ではありません。",
-                                size=12,
-                                italic=True,
-                                color=ft.Colors.GREY_700,
-                            ),
-                        ]
-                    ),
-                    padding=10,
-                    border=ft.border.all(1, ft.Colors.GREY_400),
-                    border_radius=5,
-                ),
-                ft.Container(
-                    content=ft.Column(
-                        [
-                            ft.Text("VIF値", size=16, weight=ft.FontWeight.BOLD),
-                            vif_table(calculate_vif(X)),
-                        ]
-                    ),
-                    padding=10,
-                    border=ft.border.all(1, ft.Colors.GREY_400),
-                    border_radius=5,
-                ),
+                # ft.Container(
+                #     content=ft.Column(
+                #         [
+                #             ft.Text("VIF値", size=16, weight=ft.FontWeight.BOLD),
+                #             vif_table(calculate_vif(X)),
+                #         ]
+                #     ),
+                #     padding=10,
+                #     border=ft.border.all(1, ft.Colors.GREY_400),
+                #     border_radius=5,
+                # ),
             ]
         )
-
-        # 保存ボタンを有効化
-        save_button.disabled = False
 
         page.update()
 
@@ -1339,6 +1075,7 @@ def run_dynamic_regression(
         import traceback
 
         print(f"DEBUG: エラーの詳細:\n{traceback.format_exc()}")
+        # スナックバーの表示方法を修正
         snack = ft.SnackBar(
             content=ft.Text(f"分析実行中にエラーが発生しました: {str(e)}")
         )

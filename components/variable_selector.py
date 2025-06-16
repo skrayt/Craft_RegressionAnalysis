@@ -46,7 +46,7 @@ class VariableSelector:
         self.target_dropdown = ft.Dropdown(
             label="目的変数を選択",
             options=[ft.dropdown.Option(col) for col in self.all_columns],
-            width=250,
+            width=150,
             on_change=self._handle_target_selection,
             value=self.initial_target,
             text_size=16,
@@ -61,7 +61,7 @@ class VariableSelector:
                 for key, value in TRANSFORMATION_TYPES.items()
             ],
             value="none",
-            width=180,
+            width=150,
             on_change=lambda e: self._handle_transformation_change(
                 e, self.selected_target
             ),
@@ -71,7 +71,7 @@ class VariableSelector:
 
         # 目的変数の標準化選択用のトグルボタン
         self.target_standardization = ft.Switch(
-            label="標準化",
+            label="標準化：",
             value=False,
             on_change=lambda e: self._handle_standardization_change(
                 e, self.selected_target
@@ -89,9 +89,9 @@ class VariableSelector:
         # 目的変数の選択と変換パターンを横並びに配置
         self.target_row = ft.Row(
             [
-                self.target_dropdown,
-                self.target_transformation,
                 self.target_standardization,
+                self.target_transformation,
+                self.target_dropdown,
             ],
             alignment=ft.MainAxisAlignment.START,
             spacing=10,
@@ -162,7 +162,7 @@ class VariableSelector:
         for col in self.all_columns:
             if col != self.selected_target:
                 # 変数名の表示
-                variable_name = ft.Text(col, size=12)
+                variable_name = ft.Text(col, size=14)
 
                 # チェックボックス
                 checkbox = ft.Checkbox(
@@ -180,6 +180,7 @@ class VariableSelector:
                     ],
                     value=self.transformation_states[col],
                     width=120,
+                    text_size=12,
                     on_change=lambda e, col=col: self._handle_transformation_change(
                         e, col
                     ),
@@ -187,7 +188,9 @@ class VariableSelector:
 
                 # 標準化トグルボタン
                 standardization_switch = ft.Switch(
-                    label="標準化",
+                    label="標準化：",
+                    label_style=ft.TextStyle(size=12),
+                    label_position=ft.LabelPosition.LEFT,
                     value=self.standardization_states[col],
                     on_change=lambda e, col=col: self._handle_standardization_change(
                         e, col
@@ -198,9 +201,9 @@ class VariableSelector:
                 row = ft.Row(
                     [
                         checkbox,
-                        variable_name,
-                        transformation_dropdown,
                         standardization_switch,
+                        transformation_dropdown,
+                        variable_name,
                     ],
                     alignment=ft.MainAxisAlignment.START,
                     spacing=10,

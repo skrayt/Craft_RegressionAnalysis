@@ -33,17 +33,21 @@ from components.variable_selector import VariableSelector
 
 matplotlib.use("Agg")  # GUIバックエンドを使用しない
 
-# フォントの設定
-plt.rcParams["font.family"] = "sans-serif"  # デフォルトのsans-serifフォントを使用
-plt.rcParams["font.sans-serif"] = [
-    "Arial",
-    "Helvetica",
-    "DejaVu Sans",
-    "Yu Gothic",
-    "Meiryo",
-    "MS Gothic",
-]  # フォールバックフォントを設定
-plt.rcParams["axes.unicode_minus"] = False  # マイナス記号の文字化け防止
+# # フォントの設定
+# plt.rcParams["font.family"] = "sans-serif"  # デフォルトのsans-serifフォントを使用
+# plt.rcParams["font.sans-serif"] = [
+#     "Arial",
+#     "Helvetica",
+#     "DejaVu Sans",
+#     "Yu Gothic",
+#     "Meiryo",
+#     "MS Gothic",
+# ]  # フォールバックフォントを設定
+# plt.rcParams["axes.unicode_minus"] = False  # マイナス記号の文字化け防止
+
+# 日本語向けフォントをセット
+plt.rcParams["font.family"] = "MS Gothic"
+
 
 # グローバル変数
 checkbox_states = {}  # チェックボックスの状態を保持するグローバル辞書
@@ -69,12 +73,14 @@ response_graph_display_container = ft.Column(
     scroll=ft.ScrollMode.AUTO,
     height=300,
     expand=True,
+    alignment=ft.MainAxisAlignment.START,
 )
 
 explanatory_graphs_scroll_view = ft.Column(
     scroll=ft.ScrollMode.AUTO,
     height=400,
     expand=True,
+    alignment=ft.MainAxisAlignment.START,
 )
 
 
@@ -150,18 +156,20 @@ def time_series_page(page: ft.Page) -> ft.Container:
     # kijyunnengetu以外のカラムを取得
     all_columns = [col for col in initial_df.columns if col != "kijyunnengetu"]
 
-    # グラフ表示用のコンテナ
-    response_graph_display_container = ft.Column(
-        scroll=ft.ScrollMode.AUTO,
-        height=300,
-        expand=True,
-    )
+    # # グラフ表示用のコンテナ
+    # response_graph_display_container = ft.Column(
+    #     scroll=ft.ScrollMode.AUTO,
+    #     height=300,
+    #     expand=True,
+    #     alignment=ft.MainAxisAlignment.START
+    # )
 
-    explanatory_graphs_scroll_view = ft.Column(
-        scroll=ft.ScrollMode.AUTO,
-        height=400,
-        expand=True,
-    )
+    # explanatory_graphs_scroll_view = ft.Column(
+    #     scroll=ft.ScrollMode.AUTO,
+    #     height=400,
+    #     expand=True,
+    #     alignment=ft.MainAxisAlignment.START
+    # )
 
     # ステータス表示用のテキスト
     status_text = ft.Text("", color=ft.Colors.GREEN_700)
@@ -213,14 +221,14 @@ def time_series_page(page: ft.Page) -> ft.Container:
                 target,
                 settings[target]["transformation"],
                 settings[target]["standardization"],
-                figsize=(10, 4),
+                figsize=(6, 4),
             )
 
             # 目的変数のグラフをコンテナに追加
             response_graph_display_container.controls.append(
                 ft.Container(
                     content=ft.Image(
-                        src_base64=response_img_base64, width=800, height=300
+                        src_base64=response_img_base64, width=400, height=300
                     ),
                     padding=10,
                     border=ft.border.all(2, ft.Colors.BLUE_200),
@@ -312,13 +320,21 @@ def time_series_page(page: ft.Page) -> ft.Container:
                             [
                                 ft.Text("目的変数の時系列グラフ：", size=16),
                                 response_graph_display_container,
+                            ],
+                            expand=True,
+                            alignment=ft.MainAxisAlignment.START,
+                        ),
+                        ft.Column(
+                            [
                                 ft.Text("説明変数の時系列グラフ：", size=16),
                                 explanatory_graphs_scroll_view,
                             ],
                             expand=True,
+                            alignment=ft.MainAxisAlignment.START,
                         ),
                     ],
                     expand=True,
+                    vertical_alignment=ft.CrossAxisAlignment.START,
                 ),
             ],
             expand=True,
