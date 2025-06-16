@@ -542,4 +542,6 @@ TRANSFORMATION_TYPES = {
     "log": "対数変換",
     "diff": "差分化",
     "log_diff": "対数変換後に差分化",
+    "arcsinh": "逆双曲線正弦変換",
+    "arcsinh_diff": "逆双曲線正弦変換後に差分化",
 }

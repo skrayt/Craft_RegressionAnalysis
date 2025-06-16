@@ -8,8 +8,8 @@ import pandas as pd
 import sqlite3
 from typing import List, Tuple
 
-DB_PATH = "db/regression_data.db"  # 主に回帰分析の結果などを保存
-DATA_DB_PATH = "database.db"  # ユーザーデータ保存用
+DB_PATH = "db/database.db"  # 主に回帰分析の結果などを保存
+DATA_DB_PATH = "db/database.db"  # ユーザーデータ保存用
 
 
 def get_connection():

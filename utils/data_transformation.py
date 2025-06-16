@@ -78,6 +78,16 @@ def get_dataframe_for_pattern(
                 transformed_df[col] = np.log1p(transformed_df[col]).diff()
             # 差分化後に欠損値を削除
             transformed_df = transformed_df.dropna()
+        elif transformation_type == "arcsinh":
+            print("DEBUG: 逆双曲線正弦変換を適用")
+            for col in transformed_df.columns:
+                transformed_df[col] = np.arcsinh(transformed_df[col])
+        elif transformation_type == "arcsinh_diff":
+            print("DEBUG: 逆双曲線正弦変換後に差分化を適用")
+            for col in transformed_df.columns:
+                transformed_df[col] = np.arcsinh(transformed_df[col]).diff()
+            # 差分化後に欠損値を削除
+            transformed_df = transformed_df.dropna()
     except Exception as e:
         print(f"DEBUG: 変換適用中にエラー: {str(e)}")
         raise
@@ -134,6 +144,12 @@ def apply_transformations(
         elif transformation == "対数変換後に差分化":
             transformed_df = get_dataframe_for_pattern(df, "log_diff", False)
             result["log_diff_data"] = transformed_df
+        elif transformation == "逆双曲線正弦変換":
+            transformed_df = get_dataframe_for_pattern(df, "arcsinh", False)
+            result["arcsinh_data"] = transformed_df
+        elif transformation == "逆双曲線正弦変換後に差分化":
+            transformed_df = get_dataframe_for_pattern(df, "arcsinh_diff", False)
+            result["arcsinh_diff_data"] = transformed_df
 
     return result
 
@@ -154,4 +170,31 @@ def standardize_data(df: pd.DataFrame, table_name_prefix: str = "") -> pd.DataFr
     pd.DataFrame
         標準化されたデータフレーム
     """
-    return get_dataframe_for_pattern(df, "none", True)
+    print(f"DEBUG: standardize_data - テーブル名プレフィックス: {table_name_prefix}")
+
+    # kijyunnengetuカラムを保持
+    kijyunnengetu_col = None
+    if "kijyunnengetu" in df.columns:
+        kijyunnengetu_col = df["kijyunnengetu"]
+        df = df.drop(columns=["kijyunnengetu"])
+
+    # 標準化を適用
+    scaler = StandardScaler()
+    scaled_features = scaler.fit_transform(df)
+    scaled_df = pd.DataFrame(scaled_features, columns=df.columns)
+
+    # kijyunnengetuカラムを戻す
+    if kijyunnengetu_col is not None:
+        scaled_df["kijyunnengetu"] = kijyunnengetu_col
+
+    # データベースに保存
+    try:
+        table_name = f"{table_name_prefix}_standardized"
+        print(f"DEBUG: 標準化データを保存: {table_name}")
+        save_dataframe_to_sqlite_with_sanitization(scaled_df, table_name=table_name)
+        print(f"DEBUG: {table_name}の標準化データをデータベースに保存しました。")
+    except Exception as e:
+        print(f"DEBUG: {table_name}の標準化データの保存に失敗しました: {str(e)}")
+        raise
+
+    return scaled_df

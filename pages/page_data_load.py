@@ -355,6 +355,8 @@ def data_load_page(page: ft.Page):
         "log": "対数変換",
         "diff": "差分化",
         "log_diff": "対数変換後に差分化",
+        "arcsinh": "逆双曲線正弦変換",
+        "arcsinh_diff": "逆双曲線正弦変換後に差分化",
     }
 
     # ヘッダーとデータ行の表示用コンポーネント
@@ -549,16 +551,23 @@ def data_load_page(page: ft.Page):
     def update_displayed_data(page: ft.Page):
         """選択された設定に基づいて表示データを更新"""
         # 標準化スイッチの制御を先に行う
-        if transformation_dropdown.value == "none":
-            standardized_df = read_dataframe_from_sqlite("merged_standardized")
-            standardization_switch.disabled = (
-                standardized_df is None or standardized_df.empty
-            )
+        if (
+            standardization_switch.value
+        ):  # 標準化スイッチがオンの場合のみ標準化データを読み込む
+            if transformation_dropdown.value == "none":
+                standardized_df = read_dataframe_from_sqlite("merged_data_standardized")
+                standardization_switch.disabled = (
+                    standardized_df is None or standardized_df.empty
+                )
+            else:
+                table_name = f"{transformation_dropdown.value}_data_standardized"
+                standardized_df = read_dataframe_from_sqlite(table_name)
+                standardization_switch.disabled = (
+                    standardized_df is None or standardized_df.empty
+                )
         else:
-            table_name = f"{transformation_dropdown.value}_data_standardized"
-            standardized_df = read_dataframe_from_sqlite(table_name)
             standardization_switch.disabled = (
-                standardized_df is None or standardized_df.empty
+                False  # 標準化スイッチがオフの場合は常に有効
             )
 
         # データの表示を更新

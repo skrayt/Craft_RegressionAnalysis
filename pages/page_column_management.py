@@ -181,19 +181,20 @@ def column_management_page(
             # page.app_dataのmerged_dfも更新
             page.app_data.merged_df = new_df.copy()  # type: ignore
 
-            # 変換なしデータの標準化データを生成して保存
-            standardized_df = standardize_data(
-                new_df.copy(), table_name_prefix="merged"
-            )
-            print("DEBUG: 変換なしデータの標準化データをデータベースに保存しました。")
-
             # 変換データの生成と保存
-            transformations = ["対数変換", "差分化", "対数変換後に差分化"]
+            transformations = [
+                "対数変換",
+                "差分化",
+                "対数変換後に差分化",
+                "逆双曲線正弦変換",
+                "逆双曲線正弦変換後に差分化",
+            ]
             transformed_dfs = apply_transformations(new_df.copy(), transformations)
 
             # 各変換データをデータベースに保存
             for table_name, df in transformed_dfs.items():
                 try:
+                    print(f"DEBUG: {table_name}の処理を開始")
                     # 変換データを保存する前に差分化データのna行を削除
                     df = df.dropna()
                     # 変換データを保存
@@ -203,12 +204,22 @@ def column_management_page(
                     print(f"DEBUG: {table_name}をデータベースに保存しました。")
 
                     # 標準化データを生成して保存
-                    standardized_df = standardize_data(df, table_name_prefix=table_name)
-                    print(
-                        f"DEBUG: {table_name}の標準化データをデータベースに保存しました。"
-                    )
+                    print(f"DEBUG: {table_name}の標準化処理を開始")
+                    try:
+                        standardized_df = standardize_data(
+                            df, table_name_prefix=table_name
+                        )
+                        print(
+                            f"DEBUG: {table_name}の標準化データをデータベースに保存しました。"
+                        )
+                    except Exception as e:
+                        print(
+                            f"DEBUG: {table_name}の標準化処理に失敗しました: {str(e)}"
+                        )
+                        raise
                 except Exception as e:
-                    print(f"DEBUG: {table_name}の保存に失敗しました: {e}")
+                    print(f"DEBUG: {table_name}の保存に失敗しました: {str(e)}")
+                    raise
 
             # 保存成功時の処理
             has_unsaved_changes = False
